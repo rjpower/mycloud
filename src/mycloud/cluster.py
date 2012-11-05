@@ -1,30 +1,20 @@
 #!/usr/bin/env python
 
 from cloud.serialization import cloudpickle
+from rpc.client import RPCClient
 import Queue
 import collections
 import logging
-from rpc.client import RPCClient
 import mycloud.connections
 import mycloud.thread
 import mycloud.util
 import socket
 import sys
 import traceback
-from logging import thread
-import time
-
-mycloud.thread.init()
+from mycloud.util import PeriodicLogger
 
 class ClusterException(Exception):
   pass
-
-def arg_name(args):
-  '''Returns a short string representation of an argument list for a task.'''
-  a = args[0]
-  if isinstance(a, object):
-    return a.__class__.__name__
-  return repr(a)
 
 @mycloud.util.memoized
 def cached_pickle(v):
@@ -46,7 +36,7 @@ class Task(object):
 
   def start(self, client):
     self.client = client
-    logging.info('Starting task %s on %s', self.idx, client)
+    logging.debug('Starting task %s on %s', self.idx, client)
     self.future = self.client.run(self.f_pickle, self.args_pickle, self.kw_pickle)
     self.started = True
   
@@ -67,7 +57,16 @@ machine resources become available.'''
     self.controller = controller
     self.host = host
     self.cores = cores
+    self.tasks = []
 
+  def run(self, task):
+    task.start(self.client)
+    self.tasks.append(task)
+  
+  def idle_cores(self):
+    self.tasks = [t for t in self.tasks if not t.poll()]
+    return self.cores - len(self.tasks)
+  
   def connect(self):
     ssh = mycloud.connections.SSH.connect(self.host)
     self.stdin, self.stdout, self.stderr = ssh.invoke(
@@ -91,6 +90,7 @@ class Cluster(object):
     self.tmp_prefix = tmp_prefix
     self.servers = None
     self.exceptions = []
+    self.status_logger = PeriodicLogger(5)
 
     assert self.cores_for_machine
 
@@ -142,7 +142,7 @@ prior to raising a ClusterException.'''
 
   def check_status(self, tasks):
     tasks_done = sum([t.poll() for t in tasks])
-    logging.info('Working... %d/%d', tasks_done, len(tasks))
+    self.status_logger.info('Working... %d/%d', tasks_done, len(tasks))
     
     return tasks_done == len(tasks)
 
@@ -167,21 +167,7 @@ prior to raising a ClusterException.'''
 
     for t in tasks:
       t.run()
-
-  def _server_thread(self, server, task_q):
-    try:
-      mytasks = []
-      while 1:
-        t = task_q.get_nowait()
-        t.start(server.client)
-        mytasks.append(t)
-        if len(mytasks) >= server.cores:
-          for t in mytasks:
-            t.wait()
-          mytasks = []
-    except Queue.Empty:
-      pass
-
+  
   def map(self, f, arglist, name='generic-map'):
     assert len(arglist) > 0
     idx = 0
@@ -197,17 +183,20 @@ prior to raising a ClusterException.'''
 
     logging.info('Mapping %d tasks against %d servers', len(tasks), len(self.servers))
     
-    runner_threads = [mycloud.thread.spawn(lambda: self._server_thread(s, task_queue))
-                      for s in self.servers.values()]
-    
-    # Instead of joining on the task_queue, we poll the server 
-    # threads so we can stop early in case we encounter an exception.
     done = False
     while not done:
-      self.check_exceptions()
-      done = self.check_status(tasks)
-      mycloud.thread.sleep(1)
+      if not task_queue.empty():
+        try:
+          for server in self.servers.values():
+            for core in range(server.idle_cores()):
+              t = task_queue.get_nowait()
+              server.run(t)
+        except Queue.Empty:
+          pass
 
-    for t in runner_threads: t.join()
+      done = self.check_status(tasks)
+      self.check_exceptions()
+      mycloud.thread.sleep(0.1)
+
     logging.info('Done.')
     return [t.wait() for t in tasks]

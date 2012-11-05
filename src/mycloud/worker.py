@@ -16,15 +16,14 @@ import time
 
 '''Worker for executing cluster tasks.'''
 
-mycloud.thread.init()
-
-
 def watchdog():
   while 1:
     r, w, x = select.select([sys.stdin], [], [sys.stdin], 10)
     if r or x:
       #logging.debug('Lost controller.  Exiting.')
       os._exit(1)
+    
+#    logging.info('Watchdog stacktraces: %s', '\n\t'.join(mycloud.util.stacktraces()))
 
 class WorkerTask(threading.Thread):
   def __init__(self, handle, f_pickle, a_pickle, kw_pickle):
@@ -36,7 +35,6 @@ class WorkerTask(threading.Thread):
   
   def run(self):
     try:
-      logging.info('Executing task %s %s %s', self.function, self.args, self.kw)
       self.result = self.function(*self.args, **self.kw)
     except:
       logging.info('Failed to execute task.', exc_info=1)
@@ -55,8 +53,16 @@ class WorkerHandler(object):
     logging.info('Worker started on %s:%s', self.host, self.port)
 
   def run(self, handle, f_pickle, a_pickle, kw_pickle):
+    self.cleanup()
     w = WorkerTask(handle, f_pickle, a_pickle, kw_pickle)
     w.start()
+    self.tasks[id(w)] = w
+    
+  def cleanup(self):
+    for tid, t in self.tasks.items():
+      if not t.isAlive():
+        t.join()
+        del self.tasks[tid]
     
   def healthcheck(self, handle):
     self.last_keepalive = time.time()

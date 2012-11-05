@@ -17,9 +17,6 @@ class HelperThread(threading.Thread):
     self.join()
     return self.result
 
-def init():
-  pass
-
 def spawn(f, *args, **kw):
   t = HelperThread(f, args)
   t.setDaemon(kw.get('daemon', True))
