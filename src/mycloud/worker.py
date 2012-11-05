@@ -50,15 +50,17 @@ class Worker(XMLServer):
     self.host = socket.gethostname()
     self.port = self.server_address[1]
     self.last_keepalive = time.time()
+    self._next_task_id = iter(xrange(1000000))
     self.tasks = {}
 
     logging.info('Worker started on %s:%s', self.host, self.port)
 
   def start_task(self, pickled):
     t = WorkerTask(pickled)
-    self.tasks[id(t)] = t
+    tid = self._next_task_id.next()
+    self.tasks[tid] = t
     t.start()
-    return id(t)
+    return tid
   
   def task_done(self, tid):
     return not self.tasks[tid].isAlive()

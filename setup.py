@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 
 from setuptools import setup
+import os.path
+README = open(
+    os.path.abspath(os.path.dirname(__file__)) + '/README').read()
 
 setup(
     name="mycloud",
     description="Work distribution for small clusters.",
-    long_description=open('README.md').read(),
+    long_description=README,
     classifiers=['Development Status :: 3 - Alpha',
                  'Topic :: Software Development :: Libraries',
                  'Topic :: System :: Clustering',
@@ -25,13 +28,15 @@ setup(
     author="Russell Power",
     author_email="power@cs.nyu.edu",
     license="BSD",
-    version="0.30",
+    version="0.34",
     url="http://github.com/rjpower/mycloud",
+    data_files = [('.', ['README'])],
     package_dir={ '' : 'src' },
     packages=[ 'mycloud' ],
     install_requires=[
+      'blocked_table',
+      'cloud',
       'pycrypto',
       'ssh',
-      'cloud',
     ],
 )
