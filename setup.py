@@ -28,7 +28,7 @@ setup(
     author="Russell Power",
     author_email="power@cs.nyu.edu",
     license="BSD",
-    version="0.34",
+    version="0.35",
     url="http://github.com/rjpower/mycloud",
     data_files = [('.', ['README'])],
     package_dir={ '' : 'src' },
@@ -37,6 +37,7 @@ setup(
       'blocked_table',
       'cloud',
       'pycrypto',
+      'speedy',
       'ssh',
     ],
 )

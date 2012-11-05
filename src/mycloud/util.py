@@ -4,6 +4,8 @@ from SimpleXMLRPCServer import SimpleXMLRPCServer
 from SocketServer import UDPServer, ThreadingMixIn
 from cloud.serialization import cloudpickle
 import cPickle
+import collections
+import functools
 import logging
 import mycloud.thread
 import os
@@ -25,6 +27,24 @@ def stacktraces():
       if line:
         code.append("  %s" % (line.strip()))
   return code
+
+
+class memoized(object):
+  def __init__(self, func):
+    self.func = func
+    self.cache = {}
+  
+  def __call__(self, *args):
+    assert isinstance(args, collections.Hashable)
+    if args in self.cache:
+      return self.cache[args]
+    else:
+      value = self.func(*args)
+      self.cache[args] = value 
+      return value
+
+  def __repr__(self): return self.func.__doc__
+  def __get__(self, obj, objtype): return functools.partial(self.__call__, obj)
 
 
 class PeriodicLogger(object):
@@ -108,68 +128,3 @@ class RemoteException(object):
     self.type = type
     self.value = value
     self.tb = traceback.format_exc(tb)
-
-class XMLServer(ThreadingMixIn, SimpleXMLRPCServer):
-  def __init__(self, *args, **kw):
-    SimpleXMLRPCServer.__init__(self, *args, **kw)
-    self.daemon_threads = True
-
-  def _dispatch(self, method, params):
-    try:
-      return getattr(self, method)(*params)
-    except:
-      logging.info('Exception during dispatch.', exc_info=1)
-      raise xmlrpclib.Fault(faultCode=1, faultString=traceback.format_exc())
-
-  def server_bind(self):
-    logging.info('Binding to address %s', self.server_address)
-    self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    SimpleXMLRPCServer.server_bind(self)
-
-
-class ProxyServer(XMLServer):
-  def __init__(self):
-    self.wrapped_objects = {}
-    XMLServer.__init__(self, ('0.0.0.0', find_open_port()))
-
-  def wrap(self, obj):
-    self.wrapped_objects[id(obj)] = obj
-    #logging.info('Wrapped object %s', id(obj))
-    return ProxyObject(socket.gethostname(), self.server_address[1], id(obj))
-
-  def invoke(self, objid, method, *args, **kw):
-    try:
-      #logging.info('Invoking method: %s', method)
-      result = getattr(self.wrapped_objects[objid], method)(*args, **kw)
-      #logging.info('Successfully invoked %s', method)
-      return xmlrpclib.Binary(cloudpickle.dumps(result))
-    except:
-      logging.info('Exception during dispatch of %s.', method, exc_info=1)
-      raise
-
-
-class ProxyObject(object):
-  def __init__(self, host, port, objid):
-    self.host = host
-    self.port = port
-    self.objid = objid
-    self.server = None
-
-  def get_server(self):
-    if self.server is None:
-#      logging.info('Connecting to %s %d', self.host, self.port)
-      self.server = xmlrpclib.ServerProxy('http://%s:%d' % (self.host, self.port))
-#      logging.info('Connection established to %s %d', self.host, self.port)
-    return self.server
-
-  def invoke(self, method, *args, **kw):
-    for i in range(5):
-      try:
-        result = self.get_server().invoke(self.objid, method, *args, **kw)
-        return cPickle.loads(result.data)
-      except:
-        logging.info('Failed to invoke remote method %s on %s.  Trying again.',
-                     method, self.host, exc_info=1)
-        mycloud.thread.sleep(5)
-    raise Exception('Failed to invoke remote method %s on %s' %
-                    (method, self.host))

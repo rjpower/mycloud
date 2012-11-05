@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 from cloud.serialization import cloudpickle
-from mycloud.util import XMLServer
+from rpc.server import RPCServer
 import argparse
 import cPickle
 import logging
@@ -13,71 +13,54 @@ import socket
 import sys
 import threading
 import time
-import xmlrpclib
+
+'''Worker for executing cluster tasks.'''
 
 mycloud.thread.init()
 
-__doc__ = '''Worker for executing cluster tasks.'''
 
-def watchdog(worker):
+def watchdog():
   while 1:
     r, w, x = select.select([sys.stdin], [], [sys.stdin], 10)
     if r or x:
       #logging.debug('Lost controller.  Exiting.')
       os._exit(1)
 
-#    logging.info('Watchdog stacktraces: %s',
-#                 '\n\t'.join(mycloud.util.stacktraces()))
-
 class WorkerTask(threading.Thread):
-  def __init__(self, pickled):
+  def __init__(self, handle, f_pickle, a_pickle, kw_pickle):
     threading.Thread.__init__(self)
-    self.pickled_data = pickled.data
+    self.handle = handle
+    self.function = cPickle.loads(f_pickle)
+    self.args = cPickle.loads(a_pickle)
+    self.kw = cPickle.loads(kw_pickle)
   
   def run(self):
     try:
-      f, args, kw = cPickle.loads(self.pickled_data)
-      logging.info('Executing task %s %s %s', f, args, kw)
-      self.result = f(*args, **kw)
+      logging.info('Executing task %s %s %s', self.function, self.args, self.kw)
+      self.result = self.function(*self.args, **self.kw)
     except:
       logging.info('Failed to execute task.', exc_info=1)
       self.result = sys.exc_info()
+    
+    self.handle.done(self.result)
   
-class Worker(XMLServer):
-  def __init__(self, *args, **kw):
-    XMLServer.__init__(self, *args, **kw)
-
-    self.host = socket.gethostname()
-    self.port = self.server_address[1]
+class WorkerHandler(object):
+  def __init__(self, host, port):
+    self.host = host
+    self.port = port
     self.last_keepalive = time.time()
     self._next_task_id = iter(xrange(1000000))
     self.tasks = {}
 
     logging.info('Worker started on %s:%s', self.host, self.port)
 
-  def start_task(self, pickled):
-    t = WorkerTask(pickled)
-    tid = self._next_task_id.next()
-    self.tasks[tid] = t
-    t.start()
-    return tid
-  
-  def task_done(self, tid):
-    return not self.tasks[tid].isAlive()
+  def run(self, handle, f_pickle, a_pickle, kw_pickle):
+    w = WorkerTask(handle, f_pickle, a_pickle, kw_pickle)
+    w.start()
     
-  def wait_for_task(self, tid):
-    task = self.tasks[tid]
-    task.join()
-    return xmlrpclib.Binary(cPickle.dumps(task.result, -1))
-
-  
-  def execute_task(self, pickled):
-    task_id = self.start_task(pickled)
-    return self.wait_for_task(task_id)
-
-  def healthcheck(self):
+  def healthcheck(self, handle):
     self.last_keepalive = time.time()
-    return 'alive'
+    self.done('alive')
 
 if __name__ == '__main__':
   p = argparse.ArgumentParser()
@@ -102,8 +85,8 @@ if __name__ == '__main__':
     logging.getLogger().addHandler(
       logging.handlers.DatagramHandler(opts.logger_host, opts.logger_port))
 
-  worker = Worker(('0.0.0.0', myport))
-  worker.timeout = 1
+  worker = WorkerHandler(socket.gethostname(), myport)
+  server = RPCServer('0.0.0.0', myport, worker)
 
   sys.stdout.write('%s\n' % myport)
   sys.stdout.flush()
@@ -113,14 +96,5 @@ if __name__ == '__main__':
   sys.stdout = open(log_prefix + '.out', 'w')
   sys.stderr = open(log_prefix + '.err', 'w')
 
-  mycloud.thread.spawn(watchdog, worker)
-
-  # handle requests until we lose our stdin connection the controller
-  try:
-    while 1:
-      worker.handle_request()
-  except:
-    logging.info('Error while serving.', exc_info=1)
-
-
-  logging.info('Shutting down.')
+  mycloud.thread.spawn(watchdog)
+  server.serve_forever()
