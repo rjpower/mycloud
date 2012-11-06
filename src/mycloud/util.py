@@ -89,7 +89,7 @@ class LoggingServer(TCPServer):
     rlen = struct.unpack('>L', header)[0]
     req = socket.recv(rlen)
     while len(req) < rlen:
-      chunk = socket.recv(rlen - len(chunk))
+      chunk = socket.recv(rlen - len(req))
       if chunk is None:
         return
       req += chunk
