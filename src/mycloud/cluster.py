@@ -12,6 +12,16 @@ import socket
 import sys
 import traceback
 from mycloud.util import PeriodicLogger
+    
+LOG_SERVER = None
+
+def start_logserver():
+  global LOG_SERVER
+  if LOG_SERVER is not None:
+    return
+
+  LOG_SERVER = mycloud.util.LoggingServer()
+  mycloud.thread.spawn(LOG_SERVER.serve_forever)
 
 class ClusterException(Exception):
   pass
@@ -73,7 +83,7 @@ machine resources become available.'''
       sys.executable,
       '-m', 'mycloud.worker',
       '--logger_host=%s' % socket.gethostname(),
-      '--logger_port=%s' % logging.handlers.DEFAULT_UDP_LOGGING_PORT)
+      '--logger_port=%s' % logging.handlers.DEFAULT_TCP_LOGGING_PORT)
 
     try:
       self.port = int(self.stdout.readline().strip())
@@ -92,14 +102,8 @@ class Cluster(object):
     self.exceptions = []
     self.status_logger = PeriodicLogger(5)
 
-    assert self.cores_for_machine
-
-    self.__start()
-
-
-  def __start(self):
-    self.log_server = mycloud.util.LoggingServer(self)
-    mycloud.thread.spawn(self.log_server.serve_forever)
+    start_logserver()
+    LOG_SERVER.attach(self)
 
     servers = {}
     connections = []
@@ -115,6 +119,7 @@ class Cluster(object):
     logging.info('Started %d servers...', len(servers))
 
   def __del__(self):
+    LOG_SERVER.detach()
     logging.info('Goodbye!')
 
   def report_exception(self, exc):
@@ -196,7 +201,7 @@ prior to raising a ClusterException.'''
 
       done = self.check_status(tasks)
       self.check_exceptions()
-      mycloud.thread.sleep(0.1)
+      mycloud.thread.sleep(0.01)
 
     logging.info('Done.')
     return [t.wait() for t in tasks]

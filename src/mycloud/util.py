@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
-from SimpleXMLRPCServer import SimpleXMLRPCServer
-from SocketServer import UDPServer, ThreadingMixIn
+from SocketServer import TCPServer, ThreadingMixIn
 from cloud.serialization import cloudpickle
 import cPickle
 import collections
@@ -64,44 +63,43 @@ def create_tempfile(dir, suffix):
   os.system("mkdir -p '%s'" % dir)
   return tempfile.NamedTemporaryFile(dir=dir, suffix=suffix)
 
-class LoggingServer(UDPServer):
-  '''Listen for UDP log messages on the default port.
-  
-If a record containing an exception is found, report it to the controller.
-'''
-  log_output = ""
-
-  def __init__(self, controller):
+class LoggingServer(TCPServer):
+  def __init__(self):
     host = '0.0.0.0'
-    port = logging.handlers.DEFAULT_UDP_LOGGING_PORT
-
-    UDPServer.__init__(self, (host, port), None)
+    port = logging.handlers.DEFAULT_TCP_LOGGING_PORT
+    self.allow_reuse_address = True
+    TCPServer.__init__(self, (host, port), None)
     self.timeout = 0.1
-    self.controller = controller
+    self.controller = None
 
     # for each distinct host, keep track of the last message sent
     self.message_map = {}
 
-  def server_bind(self):
-    logging.info('LoggingServer binding to address %s', self.server_address)
-    self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    UDPServer.server_bind(self)
+  def attach(self, controller):
+    self.controller = controller
 
-  def finish_request(self, request, client_address):
-    packet, socket = request
+  def detach(self):
+    self.controller = None
 
-    rlen = struct.unpack('>L', packet[:4])[0]
+  def finish_request(self, socket, client_address):
+    header = socket.recv(4)
+    if len(header) < 4:
+      return
 
-    if len(packet) != rlen + 4:
-      logging.error('Received invalid logging packet. %s %s',
-                    len(packet), rlen)
+    rlen = struct.unpack('>L', header)[0]
+    req = socket.recv(rlen)
+    while len(req) < rlen:
+      chunk = socket.recv(rlen - len(chunk))
+      if chunk is None:
+        return
+      req += chunk
 
-    record = logging.makeLogRecord(cPickle.loads(packet[4:]))
+    record = logging.makeLogRecord(cPickle.loads(req))
     srchost = client_address[0]
 
     self.message_map[client_address] = record
 
-    if record.exc_info:
+    if record.exc_info and self.controller is not None:
       self.controller.report_exception(record.exc_info)
 #      logging.info('Exception from %s.', srchost)
     else:

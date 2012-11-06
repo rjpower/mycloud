@@ -89,7 +89,7 @@ if __name__ == '__main__':
                  opts.logger_host, opts.logger_port)
 
     logging.getLogger().addHandler(
-      logging.handlers.DatagramHandler(opts.logger_host, opts.logger_port))
+      logging.handlers.SocketHandler(opts.logger_host, opts.logger_port))
 
   worker = WorkerHandler(socket.gethostname(), myport)
   server = RPCServer('0.0.0.0', myport, worker)

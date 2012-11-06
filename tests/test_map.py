@@ -17,4 +17,7 @@ class TestMap(unittest.TestCase):
       map(lambda a: 2 * a, range(10000)))
             
 if __name__ == '__main__':
-    unittest.main()
+#  import cProfile
+#  tester = TestMap('testLocalLarge')
+#  cProfile.runctx('tester.testLocalLarge()', globals(), locals(), 'prof.out')
+  unittest.main()
