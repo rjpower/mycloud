@@ -48,9 +48,15 @@ class Task(object):
     self.started = True
   
   def poll(self):
-    if self.future and self.future.done():
+    if self.done():
+      result = self.future.result
+      if isinstance(result, mycloud.util.WorkerException):
+        raise mycloud.util.ClusterException, '\n'.join(result.tb).replace('\n', '\n>> ')
       return True
     return False
+  
+  def done(self):
+    return self.future is not None and self.future.done()
   
   def wait(self):
     result = self.future.wait()
@@ -74,7 +80,7 @@ machine resources become available.'''
     self.tasks.append(task)
   
   def idle_cores(self):
-    self.tasks = [t for t in self.tasks if not t.poll()]
+    self.tasks = [t for t in self.tasks if not t.done()]
     return self.cores - len(self.tasks)
   
   def connect(self):

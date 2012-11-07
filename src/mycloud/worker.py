@@ -14,16 +14,18 @@ import time
 
 '''Worker for executing cluster tasks.'''
 
+WORKERS = None
+
 def watchdog():
   while 1:
     r, w, x = select.select([sys.stdin], [], [sys.stdin], 10)
     if r or x:
       #logging.debug('Lost controller.  Exiting.')
-      os._exit(1)
+      if WORKERS is not None:
+        WORKERS.terminate()
+      sys.exit(1)
     
 #    logging.info('Watchdog stacktraces: %s', '\n\t'.join(mycloud.util.stacktraces()))
-
-WORKERS = multiprocessing.Pool()
 
 class WorkerHandler(object):
   def __init__(self, host, port, log_host, log_port):
@@ -49,6 +51,7 @@ class WorkerHandler(object):
     self.done('alive')
 
 if __name__ == '__main__':
+  WORKERS = multiprocessing.Pool()
   p = argparse.ArgumentParser()
   p.add_argument('--logger_host', type=str)
   p.add_argument('--logger_port', type=int)
