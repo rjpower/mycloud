@@ -1,7 +1,14 @@
 #!/usr/bin/env python
 
+import logging
 import mycloud
 import unittest
+
+logging.basicConfig(format='%(asctime)s %(filename)s:%(funcName)s %(message)s',
+                    level=logging.INFO)
+
+def bad_func(idx):
+  raise Exception('idx %d' % idx)
 
 class TestMap(unittest.TestCase):
   def testLocal(self):
@@ -11,10 +18,14 @@ class TestMap(unittest.TestCase):
       map(lambda a: 2 * a, range(10)))
     
   def testLocalLarge(self):
-    c = mycloud.Cluster([('localhost', 100)])
+    c = mycloud.Cluster([('localhost', 1000)])
     self.assertListEqual(
       c.map(lambda a: 2 * a, range(10000)),
       map(lambda a: 2 * a, range(10000)))
+
+  def testException(self):
+    c = mycloud.Cluster([('localhost', 4)])
+    c.map(bad_func, range(10))
             
 if __name__ == '__main__':
 #  import cProfile

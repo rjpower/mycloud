@@ -6,6 +6,7 @@ import atexit
 import logging
 import ssh
 import subprocess
+import sys
 import threading
 
 class SSH(object):
@@ -40,13 +41,7 @@ class SSH(object):
         self._connect()
 
     logging.info('Invoking %s %s', command, args)
-    chan = self.client._transport.open_session()
-    stdin = chan.makefile('wb', 64)
-    stdout = chan.makefile('rb', 64)
-    stderr = chan.makefile_stderr('rb', 64)
-
-    chan.exec_command(command + ' ' + ' '.join(args))
-
+    stdin, stdout, stderr = self.client.exec_command('PYTHONPATH=%s %s %s' % (':'.join(sys.path), command, ' '.join(args)))
     return stdin, stdout, stderr
 
   @staticmethod

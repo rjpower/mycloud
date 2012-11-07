@@ -1,17 +1,15 @@
 #!/usr/bin/env python
 
-from cloud.serialization import cloudpickle
 from rpc.server import RPCServer
 import argparse
-import cPickle
 import logging
+import multiprocessing
 import mycloud.thread
 import mycloud.util
 import os
 import select
 import socket
 import sys
-import threading
 import time
 
 '''Worker for executing cluster tasks.'''
@@ -25,27 +23,14 @@ def watchdog():
     
 #    logging.info('Watchdog stacktraces: %s', '\n\t'.join(mycloud.util.stacktraces()))
 
-class WorkerTask(threading.Thread):
-  def __init__(self, handle, f_pickle, a_pickle, kw_pickle):
-    threading.Thread.__init__(self)
-    self.handle = handle
-    self.function = cPickle.loads(f_pickle)
-    self.args = cPickle.loads(a_pickle)
-    self.kw = cPickle.loads(kw_pickle)
-  
-  def run(self):
-    try:
-      self.result = self.function(*self.args, **self.kw)
-    except:
-      logging.info('Failed to execute task.', exc_info=1)
-      self.result = sys.exc_info()
-    
-    self.handle.done(self.result)
-  
+WORKERS = multiprocessing.Pool()
+
 class WorkerHandler(object):
-  def __init__(self, host, port):
+  def __init__(self, host, port, log_host, log_port):
     self.host = host
     self.port = port
+    self.log_host = log_host
+    self.log_port = log_port
     self.last_keepalive = time.time()
     self._next_task_id = iter(xrange(1000000))
     self.tasks = {}
@@ -53,17 +38,12 @@ class WorkerHandler(object):
     logging.info('Worker started on %s:%s', self.host, self.port)
 
   def run(self, handle, f_pickle, a_pickle, kw_pickle):
-    self.cleanup()
-    w = WorkerTask(handle, f_pickle, a_pickle, kw_pickle)
-    w.start()
-    self.tasks[id(w)] = w
-    
-  def cleanup(self):
-    for tid, t in self.tasks.items():
-      if not t.isAlive():
-        t.join()
-        del self.tasks[tid]
-    
+#    handle.done(mycloud.util.run_task(self.log_host, self.log_port, 
+#                                      f_pickle, a_pickle, kw_pickle))
+    WORKERS.apply_async(mycloud.util.run_task, 
+                        (self.log_host, self.log_port, f_pickle, a_pickle, kw_pickle), 
+                        callback=lambda res: handle.done(res))
+        
   def healthcheck(self, handle):
     self.last_keepalive = time.time()
     self.done('alive')
@@ -85,13 +65,11 @@ if __name__ == '__main__':
                       level=logging.INFO)
 
   if opts.logger_host:
-    logging.info('Additionally logging to %s:%s',
-                 opts.logger_host, opts.logger_port)
+    mycloud.util.add_socket_logger(opts.logger_host, opts.logger_port)
 
-    logging.getLogger().addHandler(
-      logging.handlers.SocketHandler(opts.logger_host, opts.logger_port))
-
-  worker = WorkerHandler(socket.gethostname(), myport)
+  mycloud.thread.spawn(watchdog)
+  worker = WorkerHandler(socket.gethostname(), myport, 
+                         opts.logger_host, opts.logger_port)
   server = RPCServer('0.0.0.0', myport, worker)
 
   sys.stdout.write('%s\n' % myport)
@@ -102,5 +80,4 @@ if __name__ == '__main__':
   sys.stdout = open(log_prefix + '.out', 'w')
   sys.stderr = open(log_prefix + '.err', 'w')
 
-  mycloud.thread.spawn(watchdog)
   server.serve_forever()

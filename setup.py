@@ -28,7 +28,7 @@ setup(
     author="Russell Power",
     author_email="power@cs.nyu.edu",
     license="BSD",
-    version="0.39",
+    version="0.40",
     url="http://github.com/rjpower/mycloud",
     data_files = [('.', ['README'])],
     package_dir={ '' : 'src' },

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from cloud.serialization import cloudpickle
+from mycloud.util import PeriodicLogger
 from rpc.client import RPCClient
 import Queue
 import collections
@@ -11,7 +12,6 @@ import mycloud.util
 import socket
 import sys
 import traceback
-from mycloud.util import PeriodicLogger
     
 LOG_SERVER = None
 
@@ -22,9 +22,6 @@ def start_logserver():
 
   LOG_SERVER = mycloud.util.LoggingServer()
   mycloud.thread.spawn(LOG_SERVER.serve_forever)
-
-class ClusterException(Exception):
-  pass
 
 @mycloud.util.memoized
 def cached_pickle(v):
@@ -56,7 +53,10 @@ class Task(object):
     return False
   
   def wait(self):
-    return self.future.wait()
+    result = self.future.wait()
+    if isinstance(result, mycloud.util.WorkerException):
+      raise mycloud.util.ClusterException, '\n'.join(result.tb).replace('\n', '\n>> ')
+    return result
 
 class Server(object):
   '''Handles connections to remote cores_for_machine and execution of tasks.
@@ -111,6 +111,7 @@ class Cluster(object):
     for host, cores in self.cores_for_machine.items():
       s = Server(self, host, cores)
       servers[host] = s
+      #s.connect()
       connections.append(mycloud.thread.spawn(s.connect))
 
     for c in connections: c.join()
@@ -143,7 +144,7 @@ prior to raising a ClusterException.'''
         logging.info('Remote exception (occurred %d times):' % count)
         logging.info('%s', '\nREMOTE:'.join(exc_dump.split('\n')))
 
-      raise ClusterException
+      raise mycloud.util.ClusterException
 
   def check_status(self, tasks):
     tasks_done = sum([t.poll() for t in tasks])

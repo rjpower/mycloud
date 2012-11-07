@@ -1,12 +1,10 @@
 #!/usr/bin/env python
 
-from SocketServer import TCPServer, ThreadingMixIn
-from cloud.serialization import cloudpickle
+from SocketServer import TCPServer
 import cPickle
 import collections
 import functools
 import logging
-import mycloud.thread
 import os
 import socket
 import struct
@@ -15,7 +13,14 @@ import tempfile
 import time
 import traceback
 import types
-import xmlrpclib
+
+class ClusterException(Exception):
+  pass
+
+class WorkerException(object):
+  def __init__(self, tb):
+    self.tb = tb
+
 
 def stacktraces():
   code = []
@@ -26,7 +31,6 @@ def stacktraces():
       if line:
         code.append("  %s" % (line.strip()))
   return code
-
 
 class memoized(object):
   def __init__(self, func):
@@ -45,6 +49,29 @@ class memoized(object):
   def __repr__(self): return self.func.__doc__
   def __get__(self, obj, objtype): return functools.partial(self.__call__, obj)
 
+
+def add_socket_logger(host, port):
+  logging.info('Logging to %s:%s', host, port)
+  logging.getLogger().addHandler(logging.handlers.SocketHandler(host, port))
+
+# multiprocessing doesn't work with functions defined in the __main__ module, otherwise
+# this would be in worker.py
+def run_task(log_host, log_port, f_pickle, a_pickle, kw_pickle):
+  import multiprocessing
+  import logging
+  import cPickle
+  
+  add_socket_logger(log_host, log_port)
+
+  try:
+    logging.info('Starting task!!!')
+    function = cPickle.loads(f_pickle)
+    args = cPickle.loads(a_pickle)
+    kw = cPickle.loads(kw_pickle)
+    return function(*args, **kw)
+  except:
+    logging.info('Failed to execute task.', exc_info=1)
+    return WorkerException(traceback.format_exception(*sys.exc_info()))
 
 class PeriodicLogger(object):
   def __init__(self, period):
@@ -91,6 +118,7 @@ class LoggingServer(TCPServer):
     while len(req) < rlen:
       chunk = socket.recv(rlen - len(req))
       if chunk is None:
+        logging.info('Bad log message from %s', socket.client_address)
         return
       req += chunk
 
