@@ -32,6 +32,7 @@ setup(
     url="http://github.com/rjpower/mycloud",
     data_files = [('.', ['README'])],
     package_dir={ '' : 'src' },
+    scripts = ['scripts/cloudp'],
     packages=[ 'mycloud' ],
     install_requires=[
       'blocked_table',

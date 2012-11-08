@@ -27,8 +27,8 @@ class Resource(object):
 
 class CSV(Resource):
   class Writer(object):
-    def __init__(self, file):
-      self.file = open(file, 'w')
+    def __init__(self, f):
+      self.file = open(f, 'w')
       self.csvwriter = csv.writer(self.file)
 
     def __del__(self):
@@ -39,8 +39,8 @@ class CSV(Resource):
       self.csvwriter.writerow([k, v])
 
   class Reader(object):
-    def __init__(self, file):
-      self.csvreader = csv.reader(open(file))
+    def __init__(self, f):
+      self.csvreader = csv.reader(open(f))
 
     def __iter__(self):
       for row in self.csvreader:

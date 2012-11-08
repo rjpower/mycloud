@@ -2,6 +2,7 @@
 
 from rpc.server import RPCServer
 import argparse
+import cStringIO
 import logging
 import multiprocessing
 import mycloud.thread
@@ -39,16 +40,19 @@ class WorkerHandler(object):
 
     logging.info('Worker started on %s:%s', self.host, self.port)
 
+  def healthcheck(self, handle):
+    self.last_keepalive = time.time()
+    self.done('alive')
+    
+  def num_cores(self, handle):
+    handle.done(multiprocessing.cpu_count())
+
   def run(self, handle, f_pickle, a_pickle, kw_pickle):
 #    handle.done(mycloud.util.run_task(self.log_host, self.log_port, 
 #                                      f_pickle, a_pickle, kw_pickle))
     WORKERS.apply_async(mycloud.util.run_task, 
                         (self.log_host, self.log_port, f_pickle, a_pickle, kw_pickle), 
                         callback=lambda res: handle.done(res))
-        
-  def healthcheck(self, handle):
-    self.last_keepalive = time.time()
-    self.done('alive')
 
 if __name__ == '__main__':
   WORKERS = multiprocessing.Pool()
@@ -78,9 +82,8 @@ if __name__ == '__main__':
   sys.stdout.write('%s\n' % myport)
   sys.stdout.flush()
   
-  # redirect stdout and stderr to local files to avoid pipe/buffering issues
-  # with controller 
-  sys.stdout = open(log_prefix + '.out', 'w')
-  sys.stderr = open(log_prefix + '.err', 'w')
+  # capture stdout and stderr locally.  
+  # periodically poll them to forward messages # to the master
+  mycloud.util.redirect_out_err()
 
   server.serve_forever()

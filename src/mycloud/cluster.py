@@ -9,6 +9,7 @@ import logging
 import mycloud.connections
 import mycloud.thread
 import mycloud.util
+import os.path
 import socket
 import sys
 import traceback
@@ -28,7 +29,6 @@ def cached_pickle(v):
   return cloudpickle.dumps(v)
 
 class Task(object):
-  '''A piece of work to be executed.'''
   def __init__(self, name, index, function, args, kw):
     self.started = False
     self.idx = index
@@ -69,40 +69,59 @@ class Server(object):
   
 A Server is created for each core on a machine, and executes tasks as
 machine resources become available.'''
-  def __init__(self, controller, host, cores):
+  def __init__(self, controller, host):
     self.controller = controller
     self.host = host
-    self.cores = cores
     self.tasks = []
+    self.cores = -1
 
   def run(self, task):
     task.start(self.client)
     self.tasks.append(task)
   
   def idle_cores(self):
-    self.tasks = [t for t in self.tasks if not t.done()]
     return self.cores - len(self.tasks)
+  
+  def poll(self):
+    self.tasks = [t for t in self.tasks if not t.done()]
   
   def connect(self):
     ssh = mycloud.connections.SSH.connect(self.host)
-    self.stdin, self.stdout, self.stderr = ssh.invoke(
+    stdin, stdout, stderr = ssh.invoke(
       sys.executable,
       '-m', 'mycloud.worker',
       '--logger_host=%s' % socket.gethostname(),
       '--logger_port=%s' % logging.handlers.DEFAULT_TCP_LOGGING_PORT)
-
+    
     try:
-      self.port = int(self.stdout.readline().strip())
+      self.port = int(stdout.readline().strip())
     except:
-      logging.error('ERR: %s', self.stderr.read())
+      logging.error('ERR: %s', stderr.read())
       logging.exception('Failed to read port from remote server!')
 
     self.client = RPCClient(self.host, self.port)
+    self.cores = self.client.num_cores().wait()
     
+def load_machine_config():
+  '''Try to load the cluster configuration from (~/.config/mycloud).
+  
+  If unsuccessful, return a default configuration.
+  '''
+  config_file = os.path.expanduser('~/.config/mycloud')
+  if not os.path.exists(config_file):
+    logging.info('Config file %s missing; using default (localhost only) mode.', config_file)
+    return ['localhost']
+  
+  cluster_globals = {}
+  cluster_locals = {}
+  execfile(config_file, cluster_globals, cluster_locals)
+  return cluster_locals['machines']
 
 class Cluster(object):
   def __init__(self, machines=None, tmp_prefix=None):
-    self.cores_for_machine = dict(machines)
+    if machines is None:
+      machines = load_machine_config()
+      
     self.tmp_prefix = tmp_prefix
     self.servers = None
     self.exceptions = []
@@ -111,13 +130,14 @@ class Cluster(object):
     start_logserver()
     LOG_SERVER.attach(self)
 
+    # to speed up initializing, spawn and connect to all of our remote
+    # servers in parallel
     servers = {}
     connections = []
     index = 0
-    for host, cores in self.cores_for_machine.items():
-      s = Server(self, host, cores)
+    for host in machines:
+      s = Server(self, host)
       servers[host] = s
-      #s.connect()
       connections.append(mycloud.thread.spawn(s.connect))
 
     for c in connections: c.join()
@@ -126,10 +146,12 @@ class Cluster(object):
     logging.info('Started %d servers...', len(servers))
 
   def __del__(self):
-    LOG_SERVER.detach()
+    if LOG_SERVER is not None:
+      LOG_SERVER.detach()
     logging.info('Goodbye!')
 
   def report_exception(self, exc):
+    '''Unhandled exceptions caught by the logging server are reported here.'''
     self.exceptions.append(exc)
 
   def check_exceptions(self):
@@ -193,22 +215,22 @@ prior to raising a ClusterException.'''
       tasks.append(t)
       task_queue.put(t)
 
-    logging.info('Mapping %d tasks against %d servers', len(tasks), len(self.servers))
+    logging.info('Mapping %d tasks against %d servers', 
+                 len(tasks), len(self.servers))
     
-    done = False
-    while not done:
-      if not task_queue.empty():
-        try:
-          for server in self.servers.values():
-            for core in range(server.idle_cores()):
-              t = task_queue.get_nowait()
-              server.run(t)
-        except Queue.Empty:
-          pass
+    while not task_queue.empty():
+      for _ in range(8):
+        for server in self.servers.values():
+          if server.idle_cores() > 0 and not task_queue.empty():
+            server.run(task_queue.get_nowait())
 
-      done = self.check_status(tasks)
       self.check_exceptions()
-      mycloud.thread.sleep(0.01)
+      self.check_status(tasks)
+      for server in self.servers.values(): 
+        server.poll()
+      
+    while not self.check_status(tasks):
+      mycloud.thread.sleep(0.1)
 
     logging.info('Done.')
     return [t.wait() for t in tasks]
