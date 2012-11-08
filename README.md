@@ -14,10 +14,11 @@ Usage
 Starting your cluster::
   
     # list each machine and the number of cores to use
-    cluster = mycloud.Cluster([('machine1', 4),
-                               ('machine2', 4)],
-                               tmp_prefix='/path/to/store/results')
+    cluster = mycloud.Cluster(['machine1', 'machine2'])
 
+    # or specify defaults in ~/.config/mycloud
+    cluster = mycloud.Cluster()
+    
 Invoke a function over a list of inputs::
   
     result = cluster.map(my_expensive_function, range(1000))
@@ -25,8 +26,8 @@ Invoke a function over a list of inputs::
 Use the MapReduce interface to easily handle processing of larger datasets::
   
     from mycloud.resource import CSV  
-    input_desc = [CSV('/path/to/my_input_%d.csv' % i for i in range(100)]
-    output_desc = [CSV('/path/to/my_output_file.csv']
+    input_desc = [CSV('/path/to/my_input_%d.csv') % i for i in range(100)]
+    output_desc = [CSV('/path/to/my_output_file.csv')]
    
     def map_identity(k, v, output):
       output(k, int(v[0]))

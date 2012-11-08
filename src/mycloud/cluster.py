@@ -35,9 +35,13 @@ class Task(object):
     logging.debug('Serializing %s %s %s', function, args, kw)
     
     # Cache pickled functions, since they are the same for every task
-    self.f_pickle = cached_pickle(function)
-    self.args_pickle = cloudpickle.dumps(args)
-    self.kw_pickle = cloudpickle.dumps(kw)
+    try:
+      self.f_pickle = cached_pickle(function)
+      self.args_pickle = cloudpickle.dumps(args)
+      self.kw_pickle = cloudpickle.dumps(kw)
+    except:
+      logging.info('Failed to pickle: %s %s %s', function, args, kw)
+      raise
     
     self.future = None
 

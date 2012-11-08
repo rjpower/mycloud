@@ -1,16 +1,18 @@
 #!/usr/bin/env python
 
 import blocked_table
+import cPickle
 import collections
-import json
 import logging
 import mycloud.merge
 import mycloud.thread
 import mycloud.util
+import rpc.client
+import rpc.server
+import socket
 import sys
 import threading
 import types
-import xmlrpclib
 
 def shard_for_key(k, num_shards):
   return hash(k) % num_shards
@@ -73,7 +75,7 @@ class MapHelper(MRHelper):
 
   def output(self, k, v):
     shard = shard_for_key(k, self.num_reducers)
-    data = json.dumps((k, v))
+    data = cPickle.dumps((k, v))
     self.output_tmp[shard].append(data)
     self.buffer_size += len(data)
 
@@ -82,19 +84,22 @@ class MapHelper(MRHelper):
 
   def flush(self, final=False):
     logging.debug('Flushing map %d', self.index)
+    sends = []
     for shard in range(self.num_reducers):
+      r = self.reducers[shard]
       shard_output = self.output_tmp[shard]
       if not final and not shard_output:
         continue
 
-      self.reducers[shard].invoke('write_map_output',
-                                  self.index, shard_output, final)
-
+      sends.append(r.write_map_output(self.index, shard_output, final))
+      
+    [s.wait() for s in sends]
     self.output_tmp.clear()
     self.buffer_size = 0
     logging.debug('Flushed map %d', self.index)
 
   def run(self):
+    self.reducers = [rpc.client.RPCClient(host, port) for host, port in self.reducers]
     logging.info('Reading from: %s', self.input)
     if isinstance(self.mapper, types.ClassType):
       mapper = self.mapper(self.mrinfo, self.index, self.input)
@@ -124,13 +129,14 @@ class ReduceHelper(MRHelper):
 
     self.done = False
     self.exc_info = None
+    self.server = None
 
-  def write_map_output(self, mapper, block, is_finished):
+  def write_map_output(self, handle, mapper, block, is_finished):
     with self.lock:
       logging.debug('Reducer %d - received input from mapper %d', self.index, mapper)
       total_received = 0
       for serialized_tuple in block:
-        self.buffer.append(json.loads(serialized_tuple))
+        self.buffer.append(cPickle.loads(serialized_tuple))
         total_received += len(serialized_tuple)
 
       self.buffer_size += total_received
@@ -142,13 +148,13 @@ class ReduceHelper(MRHelper):
 
       if is_finished:
         self.maps_finished[mapper] = 1
-
+        
+    handle.done(None)
 
   def flush(self, buffer):
     logging.info('Reducer %d - flushing %s bytes', self.index, self.buffer_size)
 
-    tf = mycloud.util.create_tempfile(dir=self.tmp_prefix,
-                                      suffix='reducer-tmp')
+    tf = mycloud.util.create_tempfile(dir=self.tmp_prefix, suffix='reducer-tmp')
     bt = blocked_table.TableBuilder(tf.name)
     buffer.sort()
     for k, v in buffer:
@@ -158,16 +164,14 @@ class ReduceHelper(MRHelper):
     self.map_tmp.append(tf)
     logging.info('Reducer %d - flush finished to %s', self.index, tf.name)
 
-  def start_server(self):
+  def start(self):
     logging.info('Starting server...')
     self.lock = threading.RLock()
-
-    self.proxy_server = mycloud.util.ProxyServer()
-    self.serving_thread = mycloud.thread.spawn(self.proxy_server.serve_forever)
+    self.port = mycloud.util.find_open_port()
+    self.server = rpc.server.RPCServer('0.0.0.0', self.port, self)
     self.reducer_thread = mycloud.thread.spawn(self._run)
-
-    logging.info('Returning proxy to self')
-    return self.proxy_server.wrap(self)
+    self.serving_thread = mycloud.thread.spawn(self.server.run)
+    return (socket.gethostname(), self.port)
 
   def _run(self):
     try:
@@ -202,7 +206,7 @@ class ReduceHelper(MRHelper):
       self.done = True
 
 
-  def wait(self):
+  def get_reader(self, handle):
     while not self.done:
       mycloud.thread.sleep(1)
 
@@ -210,7 +214,7 @@ class ReduceHelper(MRHelper):
       raise self.exc_info
 
     logging.info('Waiting for reducer thread to finish...')
-    return self.output
+    handle.done(self.output)
 
 
 class MapReduce(object):
@@ -225,30 +229,27 @@ class MapReduce(object):
     logging.info('Inputs: %s...', self.input[:10])
     logging.info('Outputs: %s...', self.output[:10])
 
-    try:
-      reducers = [ReduceHelper(index=i,
-                               output=self.output[i],
-                               mapper=self.mapper,
-                               reducer=self.reducer,
-                               num_mappers=len(self.input),
-                               num_reducers=len(self.output),
-                               tmp_prefix=self.controller.tmp_prefix)
-                  for i in range(len(self.output)) ]
+    reducers = [ReduceHelper(index=i,
+                             output=self.output[i],
+                             mapper=self.mapper,
+                             reducer=self.reducer,
+                             num_mappers=len(self.input),
+                             num_reducers=len(self.output),
+                             tmp_prefix=self.controller.tmp_prefix)
+                for i in range(len(self.output)) ]
 
-      reduce_tasks = self.controller.map(lambda r: r.start_server(), reducers)
+    reducer_locations = self.controller.map(lambda r: r.start(), reducers)
 
-      mappers = [MapHelper(index=i,
-                           input=self.input[i],
-                           reducers=reduce_tasks,
-                           mapper=self.mapper,
-                           reducer=self.reducer,
-                           num_mappers=len(self.input),
-                           num_reducers=len(self.output),
-                           tmp_prefix=self.controller.tmp_prefix)
-                 for i in range(len(self.input)) ]
+    mappers = [MapHelper(index=i,
+                         input=self.input[i],
+                         reducers=reducer_locations,
+                         mapper=self.mapper,
+                         reducer=self.reducer,
+                         num_mappers=len(self.input),
+                         num_reducers=len(self.output),
+                         tmp_prefix=self.controller.tmp_prefix)
+               for i in range(len(self.input)) ]
 
-      self.controller.map(lambda m: m.run(), mappers)
-      return self.controller.map(lambda r: r.invoke('wait'), reduce_tasks)
-    except:
-      logging.info('MapReduce failed.', exc_info=1)
-      raise
+    self.controller.map(lambda m: m.run(), mappers)
+    reducer_clients = [rpc.client.RPCClient(host, port) for host, port in reducer_locations]
+    return [r.get_reader().wait() for r in reducer_clients]

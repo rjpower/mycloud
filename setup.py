@@ -1,9 +1,6 @@
 #!/usr/bin/env python
 
 from setuptools import setup
-import os.path
-README = open(
-    os.path.abspath(os.path.dirname(__file__)) + '/README').read()
 
 setup(
     name="mycloud",
@@ -28,9 +25,8 @@ setup(
     author="Russell Power",
     author_email="power@cs.nyu.edu",
     license="BSD",
-    version="0.41",
+    version="0.42",
     url="http://github.com/rjpower/mycloud",
-    data_files = [('.', ['README'])],
     package_dir={ '' : 'src' },
     scripts = ['scripts/cloudp'],
     packages=[ 'mycloud' ],

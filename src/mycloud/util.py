@@ -2,12 +2,12 @@
 
 from SocketServer import TCPServer
 import cPickle
-import cStringIO
 import collections
 import functools
 import logging
+import mycloud.thread
 import os
-import rpc.poller
+import select
 import socket
 import struct
 import sys
@@ -28,6 +28,18 @@ def stacktraces():
   return code
 
 
+def watchdog(fileobj):
+  '''Watch the given file - if it becomes readable or closes, exit.'''
+  while 1:
+    r, w, x = select.select([fileobj], [], [fileobj], 0.1)
+    if r or x:
+      logging.debug('Lost controller.  Exiting.')
+      sys.exit(1)
+    
+    logging.info('Watchdog running...')
+    
+#    logging.info('Watchdog stacktraces: %s', '\n\t'.join(mycloud.util.stacktraces()))
+
 def create_tempfile(dir, suffix):
   os.system("mkdir -p '%s'" % dir)
   return tempfile.NamedTemporaryFile(dir=dir, suffix=suffix)
@@ -47,15 +59,49 @@ def find_open_port():
   s.close()
   return port
 
-def add_socket_logger(host, port):
-  '''Add the remote socket logging handler to the current logging stack.'''
+def setup_remote_logging(host, port):
+  '''Reset the logging configuration, and set all logging to go through the remote socket logger.'''
   import logging.handlers
-  logging.getLogger().addHandler(logging.handlers.SocketHandler(host, port))
+  formatter = logging.Formatter('%(asctime)s %(filename)s:%(funcName)s %(message)s', None)
+
+  sock_handler = logging.handlers.SocketHandler(host, port)
+  sock_handler.setFormatter(formatter)
+  
+  err_handler = logging.StreamHandler(sys.stderr)
+  err_handler.setFormatter(formatter)
+  
+  root = logging.getLogger()
+  root.setLevel(logging.DEBUG)
+  root.handlers = [sock_handler, err_handler]
+
+def redirect_out_err():
+  td = tempfile.gettempdir()
+  sys.stdout = open('%s/mycloud.worker.out.%d' % (td, os.getpid()), 'w')
+  sys.stderr = open('%s/mycloud.worker.err.%d' % (td, os.getpid()), 'w')
+  # TODO(power) -- spawn a thread to monitor these and dump into the logger
 
 def set_non_blocking(f):
   import fcntl
   flags = fcntl.fcntl(f, fcntl.F_GETFL, 0)
   fcntl.fcntl(f, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+  
+def setup_worker_process(log_host, log_port):
+  redirect_out_err()
+  setup_remote_logging(log_host, log_port)
+
+
+# multiprocessing doesn't work with functions defined in the __main__ module, otherwise
+# this would be in worker.py
+def run_task(f_pickle, a_pickle, kw_pickle):
+  try:
+    logging.info('Starting task!!!')
+    function = cPickle.loads(f_pickle)
+    args = cPickle.loads(a_pickle)
+    kw = cPickle.loads(kw_pickle)
+    return function(*args, **kw)
+  except:
+    logging.info('Failed to execute task.', exc_info=1)
+    return WorkerException(traceback.format_exception(*sys.exc_info()))
       
 class ClusterException(Exception):
   pass
@@ -63,12 +109,6 @@ class ClusterException(Exception):
 class WorkerException(object):
   def __init__(self, tb):
     self.tb = tb
-    
-def redirect_out_err():
-  sys.stdout = cStringIO.StringIO()
-  sys.stderr = cStringIO.StringIO()
-  
-  # TODO(power) -- spawn a thread to monitor these and dump into the logger
 
 class LoggingServer(TCPServer):
   '''Listens on the local TCP logging port and forwards remote log messages
@@ -128,21 +168,6 @@ class memoized(object):
   def __repr__(self): return self.func.__doc__
   def __get__(self, obj, objtype): return functools.partial(self.__call__, obj)
 
-# multiprocessing doesn't work with functions defined in the __main__ module, otherwise
-# this would be in worker.py
-def run_task(log_host, log_port, f_pickle, a_pickle, kw_pickle):
-  add_socket_logger(log_host, log_port)
-  redirect_out_err()
-
-  try:
-    logging.info('Starting task!!!')
-    function = cPickle.loads(f_pickle)
-    args = cPickle.loads(a_pickle)
-    kw = cPickle.loads(kw_pickle)
-    return function(*args, **kw)
-  except:
-    logging.info('Failed to execute task.', exc_info=1)
-    return WorkerException(traceback.format_exception(*sys.exc_info()))
 
 class PeriodicLogger(object):
   def __init__(self, period):
