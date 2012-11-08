@@ -11,19 +11,19 @@ your own is easy as well.
 Usage
 =====
 
-Starting your cluster::
+Starting your cluster:
   
     # list each machine and the number of cores to use
     cluster = mycloud.Cluster(['machine1', 'machine2'])
-
+     
     # or specify defaults in ~/.config/mycloud
     cluster = mycloud.Cluster()
     
-Invoke a function over a list of inputs::
+Invoke a function over a list of inputs
   
     result = cluster.map(my_expensive_function, range(1000))
 
-Use the MapReduce interface to easily handle processing of larger datasets::
+Use the MapReduce interface to easily handle processing of larger datasets
   
     from mycloud.resource import CSV  
     input_desc = [CSV('/path/to/my_input_%d.csv') % i for i in range(100)]
