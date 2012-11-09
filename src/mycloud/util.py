@@ -36,7 +36,7 @@ def watchdog(fileobj):
       logging.debug('Lost controller.  Exiting.')
       sys.exit(1)
     
-    logging.info('Watchdog running...')
+    #logging.debug('Watchdog running...')
     
 #    logging.info('Watchdog stacktraces: %s', '\n\t'.join(mycloud.util.stacktraces()))
 

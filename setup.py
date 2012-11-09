@@ -77,7 +77,7 @@ datasets
     author="Russell Power",
     author_email="power@cs.nyu.edu",
     license="BSD",
-    version="0.43",
+    version="0.44",
     url="http://github.com/rjpower/mycloud",
     package_dir={ '' : 'src' },
     scripts = ['scripts/cloudp'],
