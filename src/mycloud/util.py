@@ -12,6 +12,7 @@ import socket
 import struct
 import sys
 import tempfile
+import threading
 import time
 import traceback
 import types
@@ -27,18 +28,6 @@ def stacktraces():
         code.append("  %s" % (line.strip()))
   return code
 
-
-def watchdog(fileobj):
-  '''Watch the given file - if it becomes readable or closes, exit.'''
-  while 1:
-    r, w, x = select.select([fileobj], [], [fileobj], 0.1)
-    if r or x:
-      logging.debug('Lost controller.  Exiting.')
-      sys.exit(1)
-    
-    #logging.debug('Watchdog running...')
-    
-#    logging.info('Watchdog stacktraces: %s', '\n\t'.join(mycloud.util.stacktraces()))
 
 def create_tempfile(dir, suffix):
   os.system("mkdir -p '%s'" % dir)
@@ -71,7 +60,7 @@ def setup_remote_logging(host, port):
   err_handler.setFormatter(formatter)
   
   root = logging.getLogger()
-  root.setLevel(logging.DEBUG)
+  root.setLevel(logging.INFO)
   root.handlers = [sock_handler, err_handler]
 
 def redirect_out_err():
@@ -87,14 +76,13 @@ def set_non_blocking(f):
   
 def setup_worker_process(log_host, log_port):
   redirect_out_err()
-  setup_remote_logging(log_host, log_port)
-
+  setup_remote_logging(log_host, log_port)  
 
 # multiprocessing doesn't work with functions defined in the __main__ module, otherwise
 # this would be in worker.py
 def run_task(f_pickle, a_pickle, kw_pickle):
   try:
-    logging.info('Starting task!!!')
+#    logging.info('Starting task!!!')
     function = cPickle.loads(f_pickle)
     args = cPickle.loads(a_pickle)
     kw = cPickle.loads(kw_pickle)
