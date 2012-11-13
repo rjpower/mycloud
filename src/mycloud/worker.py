@@ -2,11 +2,14 @@
 
 from rpc.server import RPCServer
 import argparse
+import cPickle
+import logging
 import multiprocessing
 import mycloud.util
 import os
 import select
 import sys
+import tempfile
 import threading
 import time
 
@@ -26,6 +29,51 @@ def watchdog():
 #    logging.info('Watchdog stacktraces: %s', '\n\t'.join(mycloud.util.stacktraces()))
 
 
+class WorkerException(object):
+  def __init__(self, tb):
+    self.tb = tb
+
+
+def setup_remote_logging(host, port):
+  '''Reset the logging configuration, and set all logging to go through the remote socket logger.'''
+  import logging.handlers
+  formatter = logging.Formatter('%(asctime)s %(filename)s:%(funcName)s %(message)s', None)
+
+  sock_handler = logging.handlers.SocketHandler(host, port)
+  sock_handler.setFormatter(formatter)
+  
+  err_handler = logging.StreamHandler(sys.stderr)
+  err_handler.setFormatter(formatter)
+  
+  root = logging.getLogger()
+  root.setLevel(logging.INFO)
+  root.handlers = [sock_handler, err_handler]
+
+def redirect_out_err():
+  td = tempfile.gettempdir()
+  sys.stdout = open('%s/mycloud.worker.out.%d' % (td, os.getpid()), 'w')
+  sys.stderr = open('%s/mycloud.worker.err.%d' % (td, os.getpid()), 'w')
+  # TODO(power) -- spawn a thread to monitor these and dump into the logger
+
+def setup_worker_process(log_host, log_port):
+  redirect_out_err()
+  setup_remote_logging(log_host, log_port)  
+
+def run_task(f_pickle, a_pickle, kw_pickle):
+  try:
+#    logging.info('Starting task!!!')
+    function = cPickle.loads(f_pickle)
+    args = cPickle.loads(a_pickle)
+    kw = cPickle.loads(kw_pickle)
+    #logging.info('S')
+    result = function(*args, **kw)
+    #logging.info('E')
+    return result
+  except:
+    logging.info('Failed to execute task.', exc_info=1)
+    return WorkerException(traceback.format_exception(*sys.exc_info()))
+      
+
 class WorkerHandler(object):
   def __init__(self):
     self.last_keepalive = time.time()
@@ -40,27 +88,22 @@ class WorkerHandler(object):
     handle.done(multiprocessing.cpu_count())
 
   def run(self, handle, f_pickle, a_pickle, kw_pickle):
-    WORKERS.apply_async(mycloud.util.run_task, (f_pickle, a_pickle, kw_pickle), callback=lambda res: handle.done(res))
+    #handle.done(run_task(f_pickle, a_pickle, kw_pickle))
+    WORKERS.apply_async(run_task, (f_pickle, a_pickle, kw_pickle), callback=lambda res: handle.done(res))
 
-if __name__ == '__main__':
-  p = argparse.ArgumentParser()
-  p.add_argument('--logger_host', type=str)
-  p.add_argument('--logger_port', type=int)
-  p.add_argument('--worker_name', type=str, default='worker')
-
-  opts = p.parse_args()
-
+def run_worker(logger_host, logger_port):
   myport = mycloud.util.find_open_port()
-  server = RPCServer('0.0.0.0', myport, WorkerHandler())
-  
-  WORKERS = multiprocessing.Pool(initializer = mycloud.util.setup_worker_process, 
-                                 initargs=(opts.logger_host, opts.logger_port))
+  global WORKERS
+  WORKERS = multiprocessing.Pool(initializer=setup_worker_process,
+                                 initargs=(logger_host, logger_port))
 
   sys.stdout.write('%s\n' % myport)
   sys.stdout.flush()
 
-  mycloud.util.setup_worker_process(opts.logger_host, opts.logger_port)
+  setup_worker_process(logger_host, logger_port)
   t = threading.Thread(target=watchdog, args=sys.stdin)
+  t.setDaemon(True)
   t.start()
-  
+
+  server = RPCServer('0.0.0.0', myport, WorkerHandler())
   server.serve_forever()

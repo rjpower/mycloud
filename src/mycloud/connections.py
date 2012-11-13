@@ -60,9 +60,9 @@ class Local(object):
     p = subprocess.Popen([command] + list(args),
                          stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE)
+                         stderr=None)
 
-    return (p.stdin, p.stdout, p.stderr)
+    return (p.stdin, p.stdout, None)
 
 
 atexit.register(SSH.shutdown)

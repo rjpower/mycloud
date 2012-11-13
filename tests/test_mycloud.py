@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 
+from mycloud.mapreduce import MapReduce
+from mycloud.resource import CSV
 import logging
 import mycloud
+import mycloud.mapreduce
 import unittest
-from mycloud.mapreduce import MapReduce
-from mycloud.resource import CSV  
 
 logging.basicConfig(format='%(asctime)s %(filename)s:%(funcName)s %(message)s',
                     level=logging.INFO)
@@ -27,9 +28,12 @@ class TestMycloud(unittest.TestCase):
     def map_identity(k, v, output):
       output(k, int(v[0]))
   
-    def reduce_sum(k, values, output):
-      output(k, sum(values))
-  
+    def reduce_sum(kv_iter, output):
+      logging.info('%s', kv_iter)
+      for k, values in mycloud.mapreduce.group(kv_iter):
+        logging.info('%s %s', k, values)
+        output(k, sum(values))
+
     mr = MapReduce(cluster, map_identity, reduce_sum, input_desc, output_desc)
     result = mr.run()
   

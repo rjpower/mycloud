@@ -1,21 +1,27 @@
 #!/usr/bin/env python
 
-from SocketServer import TCPServer
+import SocketServer
 import cPickle
 import collections
 import functools
 import logging
-import mycloud.thread
+import logging.handlers
 import os
 import select
 import socket
 import struct
 import sys
 import tempfile
-import threading
 import time
 import traceback
 import types
+
+class ClusterException(Exception):
+  pass
+
+class WorkerException(object):
+  def __init__(self, tb):
+    self.tb = tb
 
 def stacktraces():
   '''Return a formatted list of all the current thread stacks.'''
@@ -47,97 +53,54 @@ def find_open_port():
   port = s.getsockname()[1]
   s.close()
   return port
-
-def setup_remote_logging(host, port):
-  '''Reset the logging configuration, and set all logging to go through the remote socket logger.'''
-  import logging.handlers
-  formatter = logging.Formatter('%(asctime)s %(filename)s:%(funcName)s %(message)s', None)
-
-  sock_handler = logging.handlers.SocketHandler(host, port)
-  sock_handler.setFormatter(formatter)
-  
-  err_handler = logging.StreamHandler(sys.stderr)
-  err_handler.setFormatter(formatter)
-  
-  root = logging.getLogger()
-  root.setLevel(logging.INFO)
-  root.handlers = [sock_handler, err_handler]
-
-def redirect_out_err():
-  td = tempfile.gettempdir()
-  sys.stdout = open('%s/mycloud.worker.out.%d' % (td, os.getpid()), 'w')
-  sys.stderr = open('%s/mycloud.worker.err.%d' % (td, os.getpid()), 'w')
-  # TODO(power) -- spawn a thread to monitor these and dump into the logger
-
 def set_non_blocking(f):
   import fcntl
   flags = fcntl.fcntl(f, fcntl.F_GETFL, 0)
   fcntl.fcntl(f, fcntl.F_SETFL, flags | os.O_NONBLOCK)
   
-def setup_worker_process(log_host, log_port):
-  redirect_out_err()
-  setup_remote_logging(log_host, log_port)  
-
-# multiprocessing doesn't work with functions defined in the __main__ module, otherwise
-# this would be in worker.py
-def run_task(f_pickle, a_pickle, kw_pickle):
-  try:
-#    logging.info('Starting task!!!')
-    function = cPickle.loads(f_pickle)
-    args = cPickle.loads(a_pickle)
-    kw = cPickle.loads(kw_pickle)
-    return function(*args, **kw)
-  except:
-    logging.info('Failed to execute task.', exc_info=1)
-    return WorkerException(traceback.format_exception(*sys.exc_info()))
+class LogRecordStreamHandler(SocketServer.StreamRequestHandler):
+  def handle(self):
+    while True:
+      chunk = self.connection.recv(4)
+      if len(chunk) < 4:
+        break
+      slen = struct.unpack('>L', chunk)[0]
+      chunk = self.connection.recv(slen)
+      while len(chunk) < slen:
+        chunk = chunk + self.connection.recv(slen - len(chunk))
+      obj = cPickle.loads(chunk)
+      record = logging.makeLogRecord(obj)
+      logging.getLogger().handle(record)
+      controller = self.server.controller
+      if record.exc_info and controller is not None:
+        controller.report_exception(record.exc_info)
       
-class ClusterException(Exception):
-  pass
 
-class WorkerException(object):
-  def __init__(self, tb):
-    self.tb = tb
+class LoggingServer(SocketServer.ThreadingTCPServer):
+  allow_reuse_address = 1
 
-class LoggingServer(TCPServer):
-  '''Listens on the local TCP logging port and forwards remote log messages
-  (sent using logging.handlers.SocketHandler) to the local logging system.
-  
-  Exceptions are passed onto the local 'controller' object specified with the 
-  attach method. 
-  '''   
-  def __init__(self):
-    host = '0.0.0.0'
-    port = logging.handlers.DEFAULT_TCP_LOGGING_PORT
-    self.allow_reuse_address = True
-    TCPServer.__init__(self, (host, port), None)
-    self.timeout = 0.1
+  def __init__(self, host='0.0.0.0',
+         port=logging.handlers.DEFAULT_TCP_LOGGING_PORT,
+         handler=LogRecordStreamHandler):
+    SocketServer.ThreadingTCPServer.__init__(self, (host, port), handler)
+    self.abort = 0
+    self.timeout = 1
+    self.logname = None
     self.controller = None
-
+    
   def attach(self, controller):
     self.controller = controller
-
+  
   def detach(self):
     self.controller = None
-
-  def finish_request(self, socket, client_address):
-    header = socket.recv(4)
-    if len(header) < 4:
-      return
-
-    rlen = struct.unpack('>L', header)[0]
-    req = socket.recv(rlen)
-    while len(req) < rlen:
-      chunk = socket.recv(rlen - len(req))
-      if chunk is None:
-        logging.info('Bad log message from %s', socket.client_address)
-        return
-      req += chunk
-
-    record = logging.makeLogRecord(cPickle.loads(req))
-    if record.exc_info and self.controller is not None:
-      self.controller.report_exception(record.exc_info)
-    else:
-      logging.getLogger().handle(record)
+    
+  def serve_forever(self):
+    abort = 0
+    while not abort:
+      rd, wr, ex = select.select([self.socket.fileno()], [], [], self.timeout)
+      if rd:
+        self.handle_request()
+      abort = self.abort
 
 class memoized(object):
   def __init__(self, func):

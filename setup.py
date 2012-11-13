@@ -83,7 +83,7 @@ datasets
     scripts = ['scripts/cloudp'],
     packages=[ 'mycloud' ],
     install_requires=[
-      'blocked_table',
+      'leveldb',
       'cloud',
       'pycrypto',
       'speedy',

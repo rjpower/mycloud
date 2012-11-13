@@ -12,6 +12,7 @@ import mycloud.util
 import os.path
 import socket
 import sys
+import tempfile
 import traceback
     
 LOG_SERVER = None
@@ -93,7 +94,7 @@ machine resources become available.'''
     ssh = mycloud.connections.SSH.connect(self.host)
     stdin, stdout, stderr = ssh.invoke(
       sys.executable,
-      '-m', 'mycloud.worker',
+      '-m', 'mycloud.worker_main',
       '--logger_host=%s' % socket.gethostname(),
       '--logger_port=%s' % logging.handlers.DEFAULT_TCP_LOGGING_PORT)
     
@@ -122,7 +123,7 @@ def load_machine_config():
   return cluster_locals['machines']
 
 class Cluster(object):
-  def __init__(self, machines=None, tmp_prefix=None):
+  def __init__(self, machines=None, tmp_prefix=tempfile.gettempdir()):
     if machines is None:
       machines = load_machine_config()
       
