@@ -25,6 +25,7 @@ Invoke a function over a list of inputs
 
 Use the MapReduce interface to easily handle processing of larger datasets
   
+    from mycloud.mapreduce import MapReduce, group
     from mycloud.resource import CSV  
     input_desc = [CSV('/path/to/my_input_%d.csv') % i for i in range(100)]
     output_desc = [CSV('/path/to/my_output_file.csv')]
@@ -32,11 +33,11 @@ Use the MapReduce interface to easily handle processing of larger datasets
     def map_identity(k, v, output):
       output(k, int(v[0]))
   
-    def reduce_sum(k, values, output):
-      output(k, sum(values))
+    def reduce_sum(kv_iter, output): 
+      for k, values in group(kv_iter):
+        output(k, sum(values))
   
-    mr = mycloud.mapreduce.MapReduce(cluster, map_identity, reduce_sum,
-                                     input_desc, output_desc)
+    mr = MapReduce(cluster, map_identity, reduce_sum, input_desc, output_desc)
   
     result = mr.run()
   

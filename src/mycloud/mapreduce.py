@@ -67,8 +67,8 @@ class MRHelper(object):
                tmp_prefix,
                num_mappers,
                num_reducers,
-               max_map_buffer_size=1e6,
-               max_reduce_buffer_size=50e6):
+               max_map_buffer_size=128 * 1000 * 1000,
+               max_reduce_buffer_size=128 * 1000 * 1000):
     self.mapper = mapper
     self.reducer = reducer
     self.tmp_prefix = tmp_prefix
@@ -91,7 +91,7 @@ class MapWorker(MRHelper):
   def output(self, k, v, shard=None):
     if shard is None:
       shard = shard_for_key(k, self.num_reducers)
-    sv = cPickle.dumps(v)
+    sv = cPickle.dumps(v, -1)
     self.output_tmp[shard].append((k, sv))
     self.buffer_size += len(k) + len(sv)
 
@@ -165,7 +165,11 @@ class ReduceWorker(MRHelper):
     self.port = mycloud.util.find_open_port()
     self.server = rpc.server.RPCServer('0.0.0.0', self.port, self)
     os.system('rm "%s"' % self.shuffle_tmp)
-    self.shuffle_db = leveldb.LevelDB(self.shuffle_tmp)
+    self.shuffle_db = leveldb.LevelDB(self.shuffle_tmp,
+                                      write_buffer_size = (32 * (2 << 20)),
+                                      block_cache_size =  (32 * (2 << 20)),
+                                      max_open_files = 256,
+                                      block_size = 128000)
 
     self.serving_thread = mycloud.thread.spawn(self.server.run)
     self.reducer_thread = mycloud.thread.spawn(self._run)

@@ -6,6 +6,7 @@ setup(
     name="mycloud",
     description="Work distribution for small clusters.",
     long_description='''
+
 MyCloud
 =======
 
@@ -40,6 +41,7 @@ datasets
 
 ::
 
+    from mycloud.mapreduce import MapReduce, group
     from mycloud.resource import CSV  
     input_desc = [CSV('/path/to/my_input_%d.csv') % i for i in range(100)]
     output_desc = [CSV('/path/to/my_output_file.csv')]
@@ -47,11 +49,11 @@ datasets
     def map_identity(k, v, output):
       output(k, int(v[0]))
 
-    def reduce_sum(k, values, output):
-      output(k, sum(values))
+    def reduce_sum(kv_iter, output): 
+      for k, values in group(kv_iter):
+        output(k, sum(values))
 
-    mr = mycloud.mapreduce.MapReduce(cluster, map_identity, reduce_sum,
-                                     input_desc, output_desc)
+    mr = MapReduce(cluster, map_identity, reduce_sum, input_desc, output_desc)
 
     result = mr.run()
 
@@ -77,7 +79,7 @@ datasets
     author="Russell Power",
     author_email="power@cs.nyu.edu",
     license="BSD",
-    version="0.45",
+    version="0.46",
     url="http://github.com/rjpower/mycloud",
     package_dir={ '' : 'src' },
     scripts = ['scripts/cloudp'],
