@@ -36,6 +36,15 @@ Map over a list:
 
     result = cluster.map(compute_factors, range(1000))
 
+ClientFS makes accessing local files seamless!
+
+::
+
+    def my_worker(filename):
+      do_work(mycloud.fs.FS.open(filename, 'r'))
+
+    cluster.map(['client:///my/local/file'], my_worker)
+
 Use the MapReduce interface to easily handle processing of larger
 datasets:
 
@@ -43,8 +52,8 @@ datasets:
 
     from mycloud.mapreduce import MapReduce, group
     from mycloud.resource import CSV  
-    input_desc = [CSV('/path/to/my_input_%d.csv') % i for i in range(100)]
-    output_desc = [CSV('/path/to/my_output_file.csv')]
+    input_desc = [CSV('client:///path/to/my_input_%d.csv') % i for i in range(100)]
+    output_desc = [CSV('client:///path/to/my_output_file.csv')]
 
     def map_identity(kv_iter, output):
       for k, v in kv_iter:
@@ -60,9 +69,6 @@ datasets:
 
     for k, v in result[0].reader():
       print k, v
-
-*NB*: Using the MapReduce interface in this way requires some sort of
-shared filesystem (for mappers to read from and reducers to write to).
 
 Performance
 ===========
@@ -126,7 +132,7 @@ MyCloud builds on the phenomonally useful
     author="Russell Power",
     author_email="power@cs.nyu.edu",
     license="BSD",
-    version="0.47",
+    version="0.48",
     url="http://github.com/rjpower/mycloud",
     package_dir={ '' : 'src' },
     scripts = ['scripts/cloudp'],
