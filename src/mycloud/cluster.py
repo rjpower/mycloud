@@ -1,30 +1,38 @@
 #!/usr/bin/env python
 
 from cloud.serialization import cloudpickle
-from mycloud.util import PeriodicLogger
+from mycloud.config import OPTIONS
 from rpc.client import RPCClient
 import Queue
 import collections
 import logging
 import mycloud.connections
+import mycloud.fs
 import mycloud.thread
 import mycloud.util
-import os.path
+import rpc.server
 import socket
 import sys
-import tempfile
 import traceback
-    
+
+FILE_SERVER = None    
 LOG_SERVER = None
 
-def start_logserver():
-  global LOG_SERVER
-  if LOG_SERVER is not None:
-    return
+def start_helper_servers():
+  global LOG_SERVER, FILE_SERVER
+  if LOG_SERVER is not None: return
 
   LOG_SERVER = mycloud.util.LoggingServer()
   mycloud.thread.spawn(LOG_SERVER.serve_forever)
-
+  
+  fs_port = mycloud.util.find_open_port()
+  FILE_SERVER = rpc.server.RPCServer('0.0.0.0', fs_port, mycloud.fs.CloudFSHandler())
+  mycloud.thread.spawn(FILE_SERVER.serve_forever)
+  
+  OPTIONS.fs_host = socket.gethostname()
+  OPTIONS.fs_port = fs_port
+  OPTIONS.log_host = socket.gethostname()
+  
 @mycloud.util.memoized
 def cached_pickle(v):
   return cloudpickle.dumps(v)
@@ -69,11 +77,8 @@ class Task(object):
       raise mycloud.util.ClusterException, '\n'.join(result.tb).replace('\n', '\n>> ')
     return result
 
-class Server(object):
-  '''Handles connections to remote cores_for_machine and execution of tasks.
-  
-A Server is created for each core on a machine, and executes tasks as
-machine resources become available.'''
+class WorkerClient(object):
+  '''Manages connections and task execution for a remote machine.'''
   def __init__(self, controller, host):
     self.controller = controller
     self.host = host
@@ -91,7 +96,8 @@ machine resources become available.'''
     self.tasks = [t for t in self.tasks if not t.done()]
   
   def connect(self):
-    ssh = mycloud.connections.SSH.connect(self.host)
+    logging.info('host: %s', self.host)
+    ssh = mycloud.connections.Local.connect(self.host)
     stdin, stdout, stderr = ssh.invoke(
       sys.executable,
       '-m', 'mycloud.worker_main',
@@ -105,34 +111,19 @@ machine resources become available.'''
       logging.exception('Failed to read port from remote server!')
 
     self.client = RPCClient(self.host, self.port)
+    self.client.setup(OPTIONS).wait()
     self.cores = self.client.num_cores().wait()
-    
-def load_machine_config():
-  '''Try to load the cluster configuration from (~/.config/mycloud).
-  
-  If unsuccessful, return a default configuration.
-  '''
-  config_file = os.path.expanduser('~/.config/mycloud')
-  if not os.path.exists(config_file):
-    logging.info('Config file %s missing; using default (localhost only) mode.', config_file)
-    return ['localhost']
-  
-  cluster_globals = {}
-  cluster_locals = {}
-  execfile(config_file, cluster_globals, cluster_locals)
-  return cluster_locals['machines']
 
 class Cluster(object):
-  def __init__(self, machines=None, tmp_prefix=tempfile.gettempdir()):
-    if machines is None:
-      machines = load_machine_config()
-      
-    self.tmp_prefix = tmp_prefix
+  def __init__(self, **kw):
+    for k, v in kw.items():
+      setattr(OPTIONS, k, v)
+    
+    start_helper_servers()
     self.servers = None
     self.exceptions = []
-    self.status_logger = PeriodicLogger(5)
+    self.status_logger = mycloud.util.PeriodicLogger(5)
 
-    start_logserver()
     LOG_SERVER.attach(self)
 
     # to speed up initializing, spawn and connect to all of our remote
@@ -140,8 +131,8 @@ class Cluster(object):
     servers = {}
     connections = []
     index = 0
-    for host in machines:
-      s = Server(self, host)
+    for host in OPTIONS.machines:
+      s = WorkerClient(self, host)
       servers[host] = s
       connections.append(mycloud.thread.spawn(s.connect))
 
@@ -220,7 +211,7 @@ prior to raising a ClusterException.'''
       tasks.append(t)
       task_queue.put(t)
 
-    logging.info('Mapping %d tasks against %d servers', 
+    logging.info('Mapping %d tasks against %d servers',
                  len(tasks), len(self.servers))
     
     while not task_queue.empty():

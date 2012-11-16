@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
+from mycloud.config import OPTIONS
 from rpc.server import RPCServer
-import argparse
 import cPickle
 import logging
 import multiprocessing
@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 
 '''Worker for executing cluster tasks.'''
 
@@ -86,21 +87,32 @@ class WorkerHandler(object):
     
   def num_cores(self, handle):
     handle.done(multiprocessing.cpu_count())
+    
+  def setup(self, handle, opt):
+    for k in OPTIONS.__slots__:
+      logging.info('%s %s %s', k, getattr(OPTIONS, k), getattr(opt, k))
+      setattr(OPTIONS, k, getattr(opt, k))
+      logging.info('%s %s %s', k, getattr(OPTIONS, k), getattr(opt, k))
+      
+    setup_worker_process(OPTIONS.log_host, OPTIONS.log_port)
+    
+    # delay starting the WORKERS pool until after we have received updated
+    # configuration information from the client/master server.
+    global WORKERS
+    WORKERS = multiprocessing.Pool(initializer=setup_worker_process,
+                                   initargs=(OPTIONS.log_host, OPTIONS.log_port))
+    handle.done(True)
 
   def run(self, handle, f_pickle, a_pickle, kw_pickle):
     #handle.done(run_task(f_pickle, a_pickle, kw_pickle))
-    WORKERS.apply_async(run_task, (f_pickle, a_pickle, kw_pickle), callback=lambda res: handle.done(res))
+    WORKERS.apply_async(run_task, (f_pickle, a_pickle, kw_pickle),
+                        callback=lambda res: handle.done(res))
 
-def run_worker(logger_host, logger_port):
+def run_worker():
   myport = mycloud.util.find_open_port()
-  global WORKERS
-  WORKERS = multiprocessing.Pool(initializer=setup_worker_process,
-                                 initargs=(logger_host, logger_port))
-
   sys.stdout.write('%s\n' % myport)
   sys.stdout.flush()
 
-  setup_worker_process(logger_host, logger_port)
   t = threading.Thread(target=watchdog, args=sys.stdin)
   t.setDaemon(True)
   t.start()

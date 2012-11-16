@@ -11,10 +11,12 @@ import select
 import socket
 import struct
 import sys
-import tempfile
+import tempfile as tf
 import time
 import traceback
 import types
+
+TEMP_DIR = tf.gettempdir()
 
 class ClusterException(Exception):
   pass
@@ -22,6 +24,7 @@ class ClusterException(Exception):
 class WorkerException(object):
   def __init__(self, tb):
     self.tb = tb
+    
 
 def stacktraces():
   '''Return a formatted list of all the current thread stacks.'''
@@ -34,10 +37,9 @@ def stacktraces():
         code.append("  %s" % (line.strip()))
   return code
 
-
-def create_tempfile(dir, suffix):
-  os.system("mkdir -p '%s'" % dir)
-  return tempfile.NamedTemporaryFile(dir=dir, suffix=suffix)
+def tempfile(suffix, directory=TEMP_DIR):
+  os.system("mkdir -p '%s'" % TEMP_DIR)
+  return tf.NamedTemporaryFile(dir=directory, suffix=suffix)
 
 def to_tuple(arglist):
   for i, args in enumerate(arglist):
@@ -53,10 +55,30 @@ def find_open_port():
   port = s.getsockname()[1]
   s.close()
   return port
+
 def set_non_blocking(f):
   import fcntl
   flags = fcntl.fcntl(f, fcntl.F_GETFL, 0)
   fcntl.fcntl(f, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    
+class memoized(object):
+  def __init__(self, func):
+    self.func = func
+    self.cache = {}
+  
+  def __call__(self, *args):
+    assert isinstance(args, collections.Hashable)
+    if args in self.cache:
+      return self.cache[args]
+    else:
+      value = self.func(*args)
+      self.cache[args] = value 
+      return value
+
+  def __repr__(self): return self.func.__doc__
+  def __get__(self, obj, objtype): return functools.partial(self.__call__, obj)
+
+
   
 class LogRecordStreamHandler(SocketServer.StreamRequestHandler):
   def handle(self):
@@ -101,24 +123,6 @@ class LoggingServer(SocketServer.ThreadingTCPServer):
       if rd:
         self.handle_request()
       abort = self.abort
-
-class memoized(object):
-  def __init__(self, func):
-    self.func = func
-    self.cache = {}
-  
-  def __call__(self, *args):
-    assert isinstance(args, collections.Hashable)
-    if args in self.cache:
-      return self.cache[args]
-    else:
-      value = self.func(*args)
-      self.cache[args] = value 
-      return value
-
-  def __repr__(self): return self.func.__doc__
-  def __get__(self, obj, objtype): return functools.partial(self.__call__, obj)
-
 
 class PeriodicLogger(object):
   def __init__(self, period):

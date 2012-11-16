@@ -4,9 +4,14 @@
 
 Typically these represent files (or parts of files).
 '''
+
+from mycloud.fs import FS
+import cPickle
 import csv
 import leveldb
+import mycloud
 import os
+import subprocess
 import zipfile
 
 class ResourceException(Exception):
@@ -19,20 +24,19 @@ class Resource(object):
   def __repr__(self):
     return self.__class__.__name__ + ':' + self.filename
 
-  def exists(self):
-    return os.path.exists(self.filename)
-
-  def move(self, source, dest):
-    os.rename(source, dest)
+  def writer(self):
+    return self.__class__.Writer(self.filename)
+  
+  def reader(self):
+    return self.__class__.Reader(self.filename)
 
 class CSV(Resource):
   class Writer(object):
     def __init__(self, f):
-      self.file = open(f, 'w')
+      self.file = FS.open(f, 'w')
       self.csvwriter = csv.writer(self.file)
 
     def __del__(self):
-      self.file.flush()
       self.file.close()
 
     def add(self, k, v):
@@ -40,25 +44,18 @@ class CSV(Resource):
 
   class Reader(object):
     def __init__(self, f):
-      self.csvreader = csv.reader(open(f))
+      self.csvreader = csv.reader(FS.open(f))
 
     def __iter__(self):
       for row in self.csvreader:
         yield row[0], row[1:]
 
-  def reader(self):
-    return CSV.Reader(self.filename)
-
-  def writer(self):
-    return CSV.Writer(self.filename)
-
 class Lines(Resource):
   class Writer(object):
     def __init__(self, f):
-      self.file = open(f, 'w')
+      self.file = FS.open(f, 'w')
     
     def __del__(self):
-      self.file.flush()
       self.file.close()
       
     def add(self, k, v):
@@ -66,7 +63,7 @@ class Lines(Resource):
       
   class Reader(object):
     def __init__(self, f):
-      self.file = open(f, 'r')
+      self.file = FS.open(f, 'r')
     
     def __iter__(self):
       for line in self.file:
@@ -76,25 +73,29 @@ class Lines(Resource):
 class LevelDB(Resource):
   class Reader(object):
     def __init__(self, f):
-      self.db = leveldb.LevelDB(f)
+      self.db = leveldb.LevelDB(f, create_if_missing=False)
     
     def __iter__(self):
       for k, v in self.db.RangeIter():
-        yield k, v
+        yield k, cPickle.loads(v)
   
   class Writer(object):
     def __init__(self, f):
-      self.db = leveldb.LevelDB(f)
+      self.final_name = f
+      
+      self.tf = mycloud.options().temp_prefix + '.leveldb-tmp-%s' % os.path.basename(self.final_name)
+      self.db = leveldb.LevelDB(self.tf)
     
     def __del__(self):
+      self.db.CompactRange()
       del self.db
+      subprocess.check_call(['mv', self.tf, self.final_name])
     
     def add(self, k, v):
+      if not isinstance(k, str): k = str(k)
+      v = cPickle.dumps(v, -1)
       self.db.Put(k, v)
   
-  def reader(self): return LevelDB.Reader(self.filename)
-  def writer(self): return LevelDB.Writer(self.filename)
-
 
 class Zip(Resource):
   class Reader(object):
@@ -103,7 +104,7 @@ class Zip(Resource):
     
     def __iter__(self):
       for filename in self.zip.namelist():
-        data = self.zip.open(filename, 'r').read()
+        data = self.zip.FS.open(filename, 'r').read()
         yield filename, data
   
   class Writer(object):
@@ -114,28 +115,30 @@ class Zip(Resource):
       self.zip.close()
     
     def add(self, k, v):
-      lf = self.zip.open(k, 'w')
+      lf = self.zip.FS.open(k, 'w')
       lf.write(v)
       lf.close()
   
-  def reader(self): return Zip.Reader(self.filename)
-  def writer(self): return Zip.Writer(self.filename)
-  
+
 class Range(Resource):
   class Reader(object):
-    def __init__(self, range):
-      self.range = range
+    def __init__(self, stop, start, step):
+      self.start = start
+      self.stop = stop
+      self.step = step
 
     def __iter__(self):
-      for i in self.range:
+      for i in xrange(self.start, self.stop, self.step):
         yield i, i
 
-  def __init__(self, range):
-    Resource.__init__(self, 'range(%d)' % len(range))
-    self.range = range
+  def __init__(self, stop, start=0, step=1):
+    Resource.__init__(self, 'Range(%d, %d, %d)' % (start, stop, step))
+    self.start = start
+    self.stop = stop
+    self.step = step
 
   def reader(self):
-    return Range.Reader(self.range)
+    return Range.Reader(self.stop, self.start, self.step)
 
   def writer(self):
     raise ResourceException, 'Range does not support writing.'

@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+from mycloud.config import OPTIONS
 import cPickle
 import collections
 import leveldb
@@ -15,6 +16,11 @@ import threading
 import types
 
 def group(iterator):
+  '''Group values in iterator by key.
+  
+  Assumes the input iterator is sorted.  For each sequence (k1, v1), (k1, v2), (k1, v3)...
+  in iterator, yields (k1, [v1, v2, v3]).
+'''
   values = []
   last_k = None
   for k, v in iterator:
@@ -32,7 +38,10 @@ def group(iterator):
     yield last_k, values
 
 def shard_for_key(k, num_shards): return hash(k) % num_shards
-def identity_mapper(k, v, output): output(k, v)
+
+def identity_mapper(kv_iter, output): 
+  for k, v in kv_iter:
+    output(k, v)
 
 def identity_reducer(kv_iter, output):
   for k, v in kv_iter:
@@ -42,53 +51,18 @@ def sum_reducer(kv_iter, output):
   for k, values in group(kv_iter):
     output(k, sum(values))
 
-
-class ReduceOutput(object):
-  '''Output handler for reduces.  
-  
-  Acts as a function, but allows access to information about the current reducer:
-  
-  def my_reducer(k, v, output):
-    output(k + output.index, v)
-  '''
-  def __init__(self, reduce_helper, writer):
-    self.writer = writer
-    self.index = reduce_helper.index
-    self.num_shards = reduce_helper.num_reducers
-
-  def __call__(self, key, value):
-    self.writer.add(key, value)
-
-
-class MRHelper(object):
-  def __init__(self,
-               mapper,
-               reducer,
-               tmp_prefix,
-               num_mappers,
-               num_reducers,
-               max_map_buffer_size=128 * 1000 * 1000,
-               max_reduce_buffer_size=128 * 1000 * 1000):
+class MapWorker(object):
+  def __init__(self, mapper, index, input, reducers):
     self.mapper = mapper
-    self.reducer = reducer
-    self.tmp_prefix = tmp_prefix
-    self.num_mappers = num_mappers
-    self.num_reducers = num_reducers
-    self.max_map_buffer_size = max_map_buffer_size
-    self.max_reduce_buffer_size = max_reduce_buffer_size
-
-
-class MapWorker(MRHelper):
-  def __init__(self, index, input, reducers, **kw):
-    MRHelper.__init__(self, **kw)
-
     self.input = input
     self.index = index
     self.output_tmp = collections.defaultdict(list)
     self.buffer_size = 0
     self.reducers = reducers
+    self.num_reducers = len(reducers)
+    self.max_map_buffer_size = OPTIONS.max_map_buffer_size
 
-  def output(self, k, v, shard=None):
+  def target(self, k, v, shard=None):
     if shard is None:
       shard = shard_for_key(k, self.num_reducers)
     sv = cPickle.dumps(v, -1)
@@ -124,22 +98,26 @@ class MapWorker(MRHelper):
 
     reader = self.input.reader()
     logger = mycloud.util.PeriodicLogger(period=5)
-    for count, (k, v) in enumerate(reader):
-      logger.info('(%5d) - Read: %s', count, k)
-      mapper(k, v, self.output)
-      logger.info('(%5d) - Mapped %s', count, k)
+    mapper(reader, self.target)
     self.flush(final=True)
     logging.info('Map of %s finished.', self.input)
 
+class ReduceOutput(object):
+  def __init__(self, writer):
+    self.writer = writer
 
-class ReduceWorker(MRHelper):
-  def __init__(self, index, output, **kw):
-    MRHelper.__init__(self, **kw)
+  def __call__(self, key, value):
+    self.writer.add(key, value)
 
+
+class ReduceWorker(object):
+  def __init__(self, index, target, reducer, num_mappers):
     self.index = index
-    self.shuffle_tmp = self.tmp_prefix + '/mycloud-shuffle-tmp-%d' % self.index
+    self.reducer = reducer
+    self.num_mappers = num_mappers
+    self.shuffle_tmp = OPTIONS.temp_prefix + '/mycloud-shuffle-tmp-%d' % self.index
     self.maps_finished = [0] * self.num_mappers
-    self.output = output
+    self.target = target
 
     self.done = False
     self.exc_info = None
@@ -166,10 +144,10 @@ class ReduceWorker(MRHelper):
     self.server = rpc.server.RPCServer('0.0.0.0', self.port, self)
     os.system('rm "%s"' % self.shuffle_tmp)
     self.shuffle_db = leveldb.LevelDB(self.shuffle_tmp,
-                                      write_buffer_size = (32 * (2 << 20)),
-                                      block_cache_size =  (32 * (2 << 20)),
-                                      max_open_files = 256,
-                                      block_size = 128000)
+                                      write_buffer_size=OPTIONS.max_reduce_buffer_size,
+                                      block_cache_size=(8 * (2 << 20)),
+                                      max_open_files=2048,
+                                      block_size=128000)
 
     self.serving_thread = mycloud.thread.spawn(self.server.run)
     self.reducer_thread = mycloud.thread.spawn(self._run)
@@ -179,6 +157,7 @@ class ReduceWorker(MRHelper):
   def _run(self):
     try:
       logger = mycloud.util.PeriodicLogger(period=10)
+      out = ReduceOutput(self.target.writer())
 
       while sum(self.maps_finished) != self.num_mappers:
         logger.info('Reducer %d - waiting for map data %d/%d',
@@ -186,8 +165,6 @@ class ReduceWorker(MRHelper):
         mycloud.thread.sleep(1)
 
       logging.info('Finished reading map data, beginning merge.')
-
-      out = ReduceOutput(self, self.output.writer())
 
       if not isinstance(self.reducer, types.FunctionType):
         reducer = self.reducer()
@@ -203,7 +180,8 @@ class ReduceWorker(MRHelper):
           yield k, v 
         
       reducer(shuffle_iter(), out)
-      logging.info('Returning output: %s', self.output)
+      del out
+      logging.info('Reducer finished - target: %s', self.target)
     except:
       logging.error('Reducer failed!', exc_info=1)
       self.exc_info = sys.exc_info()
@@ -221,7 +199,7 @@ class ReduceWorker(MRHelper):
       handle.done(self.exc_info)
     else:
       logging.info('Waiting for reducer thread to finish...')
-      handle.done(self.output)
+      handle.done(self.target)
 
 
 class MapReduce(object):
@@ -230,32 +208,19 @@ class MapReduce(object):
     self.mapper = mapper
     self.reducer = reducer
     self.input = input
-    self.output = output
+    self.target = output
 
   def run(self):
     logging.info('Inputs: %s...', self.input[:10])
-    logging.info('Outputs: %s...', self.output[:10])
+    logging.info('Outputs: %s...', self.target[:10])
 
-    reducers = [ReduceWorker(index=i,
-                             output=self.output[i],
-                             mapper=self.mapper,
-                             reducer=self.reducer,
-                             num_mappers=len(self.input),
-                             num_reducers=len(self.output),
-                             tmp_prefix=self.controller.tmp_prefix)
-                for i in range(len(self.output)) ]
+    reducers = [ReduceWorker(index=i, target=self.target[i], reducer=self.reducer, num_mappers=len(self.input))
+                for i in range(len(self.target)) ]
 
     reducer_locations = self.controller.map(lambda r: r.start(), reducers)
     print reducer_locations
 
-    mappers = [MapWorker(index=i,
-                         input=self.input[i],
-                         reducers=reducer_locations,
-                         mapper=self.mapper,
-                         reducer=self.reducer,
-                         num_mappers=len(self.input),
-                         num_reducers=len(self.output),
-                         tmp_prefix=self.controller.tmp_prefix)
+    mappers = [MapWorker(mapper=self.mapper, index=i, input=self.input[i], reducers=reducer_locations)
                for i in range(len(self.input)) ]
 
     self.controller.map(lambda m: m.run(), mappers)
