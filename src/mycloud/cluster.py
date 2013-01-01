@@ -213,8 +213,9 @@ class Cluster(object):
     found_exc = False
     for r in results:
       if isinstance(r, mycloud.worker.WorkerException):
-        logging.error('Exception on worker: ', r.tb)
         found_exc = True
+        logging.error('Exception on worker: %s', r.tb)
+    
     if found_exc:
       raise ClusterException('Failing due to errors during map.')
     return results
