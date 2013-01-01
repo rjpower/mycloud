@@ -18,14 +18,6 @@ import types
 
 TEMP_DIR = tf.gettempdir()
 
-class ClusterException(Exception):
-  pass
-
-class WorkerException(object):
-  def __init__(self, tb):
-    self.tb = tb
-    
-
 def stacktraces():
   '''Return a formatted list of all the current thread stacks.'''
   code = []

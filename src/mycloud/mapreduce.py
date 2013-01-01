@@ -97,7 +97,6 @@ class MapWorker(object):
       mapper = self.mapper
 
     reader = self.input.reader()
-    logger = mycloud.util.PeriodicLogger(period=5)
     mapper(reader, self.target)
     self.flush(final=True)
     logging.info('Map of %s finished.', self.input)
@@ -115,7 +114,7 @@ class ReduceWorker(object):
     self.index = index
     self.reducer = reducer
     self.num_mappers = num_mappers
-    self.shuffle_tmp = OPTIONS.temp_prefix + '/mycloud-shuffle-tmp-%d' % self.index
+    self.shuffle_tmp = OPTIONS.temp_prefix + '/mycloud-shuffle-tmp-idx%d-pid%d' % (self.index, os.getpid())
     self.maps_finished = [0] * self.num_mappers
     self.target = target
 
@@ -138,11 +137,11 @@ class ReduceWorker(object):
     handle.done(None)
 
   def start(self):
-    logging.info('Starting server...')
     self.lock = threading.RLock()
     self.port = mycloud.util.find_open_port()
     self.server = rpc.server.RPCServer('0.0.0.0', self.port, self)
-    os.system('rm "%s"' % self.shuffle_tmp)
+    os.system('rm -rf "%s"' % self.shuffle_tmp)
+    logging.info('REDUCER - grabbing shuffle directory.')
     self.shuffle_db = leveldb.LevelDB(self.shuffle_tmp,
                                       write_buffer_size=OPTIONS.max_reduce_buffer_size,
                                       block_cache_size=(8 * (2 << 20)),
@@ -156,12 +155,10 @@ class ReduceWorker(object):
 
   def _run(self):
     try:
-      logger = mycloud.util.PeriodicLogger(period=10)
       out = ReduceOutput(self.target.writer())
 
       while sum(self.maps_finished) != self.num_mappers:
-        logger.info('Reducer %d - waiting for map data %d/%d',
-                     self.index, sum(self.maps_finished), self.num_mappers)
+        logging.debug('Reducer %d - waiting for map data %d/%d', self.index, sum(self.maps_finished), self.num_mappers)
         mycloud.thread.sleep(1)
 
       logging.info('Finished reading map data, beginning merge.')
@@ -181,9 +178,9 @@ class ReduceWorker(object):
         
       reducer(shuffle_iter(), out)
       del out
-      logging.info('Reducer finished - target: %s', self.target)
+      logging.info('Reducer %d finished - target: %s', self.index, self.target)
     except:
-      logging.error('Reducer failed!', exc_info=1)
+      logging.error('Reducer %d failed!', self.index, exc_info=1)
       self.exc_info = sys.exc_info()
     finally:
       self.done = True
@@ -191,14 +188,13 @@ class ReduceWorker(object):
 
   def get_reader(self, handle):
     while not self.done:
-      mycloud.thread.sleep(1)
+      mycloud.thread.sleep(5)
 
     if self.exc_info is not None:
       logging.error('An error occurred during the execution of the reducer.')
       logging.error(self.exc_info)
-      handle.done(self.exc_info)
+      handle.error(self.exc_info)
     else:
-      logging.info('Waiting for reducer thread to finish...')
       handle.done(self.target)
 
 
@@ -218,11 +214,16 @@ class MapReduce(object):
                 for i in range(len(self.target)) ]
 
     reducer_locations = self.controller.map(lambda r: r.start(), reducers)
-    print reducer_locations
+    logging.info('Reducer locations: %s', reducer_locations)
 
     mappers = [MapWorker(mapper=self.mapper, index=i, input=self.input[i], reducers=reducer_locations)
                for i in range(len(self.input)) ]
 
     self.controller.map(lambda m: m.run(), mappers)
     reducer_clients = [rpc.client.RPCClient(host, port) for host, port in reducer_locations]
-    return [r.get_reader().wait() for r in reducer_clients]
+    readers = [r.get_reader() for r in reducer_clients]
+    results = []
+    for i, r in enumerate(readers):
+      logging.info('Waiting for reducer %d', i)
+      results.append(r.wait())
+    return results

@@ -4,9 +4,15 @@ import socket
 import tempfile
 
 class Options(object):
-  __slots__ = ['temp_prefix', 'machines', 'max_map_buffer_size',
+  __slots__ = ['temp_prefix', 
+               'machines', 
+               'max_map_buffer_size',
                'max_reduce_buffer_size', 
-               'fs_host', 'fs_port', 'log_host', 'log_port']
+               'fs_host', 
+               'fs_port', 
+               'log_host', 
+               'log_port']
+  
   def __init__(self):
     self.temp_prefix = tempfile.gettempdir()
     self.machines = ['localhost']

@@ -14,26 +14,31 @@ import threading
 import time
 import traceback
 
+
 '''Worker for executing cluster tasks.'''
 
 WORKERS = None
+
+class WorkerException(object):
+  def __init__(self, exc_info):
+    tb = traceback.format_exception(*exc_info)
+    tb = '\n'.join(tb)
+    self.tb = tb.replace('\n', '\n>> ')
+
 
 def watchdog():
   while 1:
     r, w, x = select.select([sys.stdin], [], [sys.stdin], 10)
     if r or x:
-      #logging.debug('Lost controller.  Exiting.')
+      # logging.debug('Lost controller.  Exiting.')
       if WORKERS is not None:
-        WORKERS.terminate()
+        try:
+          WORKERS.terminate()
+        except:
+          pass
       os._exit(1)
     
 #    logging.info('Watchdog stacktraces: %s', '\n\t'.join(mycloud.util.stacktraces()))
-
-
-class WorkerException(object):
-  def __init__(self, tb):
-    self.tb = tb
-
 
 def setup_remote_logging(host, port):
   '''Reset the logging configuration, and set all logging to go through the remote socket logger.'''
@@ -66,13 +71,16 @@ def run_task(f_pickle, a_pickle, kw_pickle):
     function = cPickle.loads(f_pickle)
     args = cPickle.loads(a_pickle)
     kw = cPickle.loads(kw_pickle)
-    #logging.info('S')
+    # logging.info('S')
     result = function(*args, **kw)
-    #logging.info('E')
+    # logging.info('E')
     return result
   except:
-    logging.info('Failed to execute task.', exc_info=1)
-    return WorkerException(traceback.format_exception(*sys.exc_info()))
+    logging.info('WORKER: failed to execute task.', exc_info=1)
+    try:
+      return WorkerException(sys.exc_info())
+    except:
+      logging.error('WTF', exc_info=1)
       
 
 class WorkerHandler(object):
@@ -90,21 +98,17 @@ class WorkerHandler(object):
     
   def setup(self, handle, opt):
     for k in OPTIONS.__slots__:
-      logging.info('%s %s %s', k, getattr(OPTIONS, k), getattr(opt, k))
       setattr(OPTIONS, k, getattr(opt, k))
       logging.info('%s %s %s', k, getattr(OPTIONS, k), getattr(opt, k))
       
     setup_worker_process(OPTIONS.log_host, OPTIONS.log_port)
     
-    # delay starting the WORKERS pool until after we have received updated
-    # configuration information from the client/master server.
     global WORKERS
-    WORKERS = multiprocessing.Pool(initializer=setup_worker_process,
-                                   initargs=(OPTIONS.log_host, OPTIONS.log_port))
+    WORKERS = multiprocessing.Pool(initializer=setup_worker_process, initargs=(OPTIONS.log_host, OPTIONS.log_port))
     handle.done(True)
 
   def run(self, handle, f_pickle, a_pickle, kw_pickle):
-    #handle.done(run_task(f_pickle, a_pickle, kw_pickle))
+    # handle.done(run_task(f_pickle, a_pickle, kw_pickle))
     WORKERS.apply_async(run_task, (f_pickle, a_pickle, kw_pickle),
                         callback=lambda res: handle.done(res))
 

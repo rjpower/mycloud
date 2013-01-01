@@ -38,6 +38,9 @@ class FS(object):
     tf.close()
   
 
+'''Server side handler for ClientFS files.
+
+Simply dispatches requests to the local filesystem.'''
 class ClientFSHandler(object):
   def __init__(self):
     self.files = {}
@@ -108,6 +111,7 @@ class ClientFS(FS):
   def open(filename, mode='r'):
     host = OPTIONS.fs_host
     port = OPTIONS.fs_port
+    logging.info('host %s, port %s', host, port)
     return CloudFile(rpc.client.RPCClient(host, port), filename, mode)
   
 class LocalFS(FS):

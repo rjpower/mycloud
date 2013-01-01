@@ -6,6 +6,7 @@ Typically these represent files (or parts of files).
 '''
 
 from mycloud.fs import FS
+from mycloud.config import OPTIONS
 import cPickle
 import csv
 import leveldb
@@ -83,7 +84,7 @@ class LevelDB(Resource):
     def __init__(self, f):
       self.final_name = f
       
-      self.tf = mycloud.options().temp_prefix + '.leveldb-tmp-%s' % os.path.basename(self.final_name)
+      self.tf = OPTIONS.temp_prefix + '.leveldb-tmp-%s-%d' % (os.path.basename(self.final_name), os.getpid())
       self.db = leveldb.LevelDB(self.tf)
     
     def __del__(self):

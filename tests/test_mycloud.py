@@ -3,6 +3,7 @@
 from mycloud.mapreduce import MapReduce
 from mycloud.resource import CSV, LevelDB
 import logging
+import os
 import mycloud
 import mycloud.mapreduce
 import unittest
@@ -25,7 +26,7 @@ def reduce_sum(kv_iter, output):
     output(k, sum(values))
 
 def write_csv_files():
-  for i in range(100):
+  for i in range(10):
     w = CSV.Writer('/tmp/my_input_%d.csv' % i)
     for j in range(10):
       w.add(j, j)
@@ -46,14 +47,14 @@ class TestMycloud(unittest.TestCase):
 
   def test_exception(self):
     c = mycloud.Cluster(machines=['localhost'])
-    self.assertRaises(mycloud.util.ClusterException,
+    self.assertRaises(mycloud.cluster.ClusterException,
                       lambda: c.map(bad_func, range(10)))
 
 class TestMR(unittest.TestCase):
   def test_mr_csv(self):
     write_csv_files()
     cluster = mycloud.Cluster(machines=['localhost'])    
-    input_desc = [CSV('/tmp/my_input_%d.csv' % i) for i in range(100)]
+    input_desc = [CSV('/tmp/my_input_%d.csv' % i) for i in range(10)]
     output_desc = [CSV('/tmp/my_output.csv')]
 
     result = MapReduce(cluster, map_identity, reduce_sum, input_desc, output_desc).run()
@@ -63,7 +64,7 @@ class TestMR(unittest.TestCase):
   def test_mr_leveldb(self):
     write_csv_files()
     cluster = mycloud.Cluster(machines=['localhost'])    
-    input_desc = [CSV('/tmp/my_input_%d.csv' % i) for i in range(100)]
+    input_desc = [CSV('/tmp/my_input_%d.csv' % i) for i in range(10)]
     output_desc = [LevelDB('/tmp/my_output.ldb')]
     
     result = MapReduce(cluster, map_identity, reduce_sum, input_desc, output_desc).run()
@@ -71,9 +72,10 @@ class TestMR(unittest.TestCase):
       print k, v
     
 
-class TestCloudFS(unittest.TestCase):
+class TestClientFS(unittest.TestCase):
   def test_cloud_read(self):
     c = mycloud.Cluster(machines=['localhost'])
+    os.system('rm -rf /tmp/foo')
     rf = mycloud.fs.FS.open('client:///tmp/foo', 'w')
     rf.write('hello!')
     rf.close()
@@ -83,6 +85,7 @@ class TestCloudFS(unittest.TestCase):
     
   def test_cloud_iter(self):
     c = mycloud.Cluster(machines=['localhost'])
+    os.system('rm -rf /tmp/foo')
     lf = open('/tmp/foo', 'w')
     lf.write('abcabcabc\n' * 1000)
     lf.close()
@@ -97,7 +100,7 @@ class TestCloudFS(unittest.TestCase):
   def test_mr_cloud_fs(self):
     write_csv_files()
     cluster = mycloud.Cluster(machines=['localhost'])    
-    input_desc = [CSV('client:///tmp/my_input_%d.csv' % i) for i in range(100)]
+    input_desc = [CSV('client:///tmp/my_input_%d.csv' % i) for i in range(10)]
     output_desc = [CSV('client:///tmp/my_output.csv')]
 
     result = MapReduce(cluster, map_identity, reduce_sum, input_desc, output_desc).run()

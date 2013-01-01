@@ -9,6 +9,7 @@ import logging
 import mycloud.connections
 import mycloud.fs
 import mycloud.thread
+import mycloud.worker
 import mycloud.util
 import rpc.server
 import socket
@@ -18,6 +19,9 @@ import traceback
 FILE_SERVER = None    
 LOG_SERVER = None
 
+class ClusterException(Exception):
+  pass
+
 def start_helper_servers():
   global LOG_SERVER, FILE_SERVER
   if LOG_SERVER is not None: return
@@ -26,11 +30,12 @@ def start_helper_servers():
   mycloud.thread.spawn(LOG_SERVER.serve_forever)
   
   fs_port = mycloud.util.find_open_port()
-  FILE_SERVER = rpc.server.RPCServer('0.0.0.0', fs_port, mycloud.fs.CloudFSHandler())
+  FILE_SERVER = rpc.server.RPCServer('0.0.0.0', fs_port, mycloud.fs.ClientFSHandler())
   mycloud.thread.spawn(FILE_SERVER.serve_forever)
   
   OPTIONS.fs_host = socket.gethostname()
   OPTIONS.fs_port = fs_port
+  logging.info('Setting fs_host=%s, fs_port=%s', OPTIONS.fs_host, OPTIONS.fs_port)
   OPTIONS.log_host = socket.gethostname()
   
 @mycloud.util.memoized
@@ -63,8 +68,8 @@ class Task(object):
   def poll(self):
     if self.done():
       result = self.future.result
-      if isinstance(result, mycloud.util.WorkerException):
-        raise mycloud.util.ClusterException, '\n'.join(result.tb).replace('\n', '\n>> ')
+      if isinstance(result, mycloud.worker.WorkerException):
+        raise ClusterException, '\n'.join(result.tb).replace('\n', '\n>> ')
       return True
     return False
   
@@ -73,8 +78,8 @@ class Task(object):
   
   def wait(self):
     result = self.future.wait()
-    if isinstance(result, mycloud.util.WorkerException):
-      raise mycloud.util.ClusterException, '\n'.join(result.tb).replace('\n', '\n>> ')
+    if isinstance(result, mycloud.worker.WorkerException):
+      raise ClusterException, '\n'.join(result.tb).replace('\n', '\n>> ')
     return result
 
 class WorkerClient(object):
@@ -146,30 +151,6 @@ class Cluster(object):
       LOG_SERVER.detach()
     logging.info('Goodbye!')
 
-  def report_exception(self, exc):
-    '''Unhandled exceptions caught by the logging server are reported here.'''
-    self.exceptions.append(exc)
-
-  def check_exceptions(self):
-    '''Check if any remote exceptions have been thrown.  Log locally and rethrow.
-
-If an exception is found, the controller is shutdown and all exceptions are reported
-prior to raising a ClusterException.'''
-    if self.exceptions:
-      mycloud.connections.SSH.shutdown()
-
-      counts = collections.defaultdict(int)
-
-      for e in self.exceptions:
-        exc_dump = '\n'.join(traceback.format_exception(*e))
-        counts[exc_dump] += 1
-
-      for exc_dump, count in sorted(counts.items(), key=lambda t: t[1]):
-        logging.info('Remote exception (occurred %d times):' % count)
-        logging.info('%s', '\nREMOTE:'.join(exc_dump.split('\n')))
-
-      raise mycloud.util.ClusterException
-
   def check_status(self, tasks):
     tasks_done = sum([t.poll() for t in tasks])
     self.status_logger.info('Working... %d/%d', tasks_done, len(tasks))
@@ -220,7 +201,6 @@ prior to raising a ClusterException.'''
           if server.idle_cores() > 0 and not task_queue.empty():
             server.run(task_queue.get_nowait())
 
-      self.check_exceptions()
       self.check_status(tasks)
       for server in self.servers.values(): 
         server.poll()
@@ -229,4 +209,12 @@ prior to raising a ClusterException.'''
       mycloud.thread.sleep(0.1)
 
     logging.info('Done.')
-    return [t.wait() for t in tasks]
+    results = [t.wait() for t in tasks]
+    found_exc = False
+    for r in results:
+      if isinstance(r, mycloud.worker.WorkerException):
+        logging.error('Exception on worker: ', r.tb)
+        found_exc = True
+    if found_exc:
+      raise ClusterException('Failing due to errors during map.')
+    return results
