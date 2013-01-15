@@ -11,6 +11,8 @@ import unittest
 logging.basicConfig(format='%(asctime)s %(filename)s:%(funcName)s %(message)s',
                     level=logging.INFO)
 
+MACHINES = [ { 'hostname' : 'localhost', 'cores' : 4} ]
+
 def bad_func(idx):
   raise Exception('idx %d' % idx)
 
@@ -34,26 +36,26 @@ def write_csv_files():
 
 class TestMycloud(unittest.TestCase):
   def test_local(self):
-    c = mycloud.Cluster(machines=['localhost'])
+    c = mycloud.Cluster(machines=MACHINES)
     self.assertListEqual(
       c.map(lambda a: 2 * a, range(10)),
       map(lambda a: 2 * a, range(10)))
     
   def test_map_large(self):
-    c = mycloud.Cluster(machines=['localhost'])
+    c = mycloud.Cluster(machines=MACHINES)
     self.assertListEqual(
       c.map(lambda a: 2 * a, range(100)),
       map(lambda a: 2 * a, range(100)))
 
   def test_exception(self):
-    c = mycloud.Cluster(machines=['localhost'])
+    c = mycloud.Cluster(machines=MACHINES)
     self.assertRaises(mycloud.cluster.ClusterException,
                       lambda: c.map(bad_func, range(10)))
 
 class TestMR(unittest.TestCase):
   def test_mr_csv(self):
     write_csv_files()
-    cluster = mycloud.Cluster(machines=['localhost'])    
+    cluster = mycloud.Cluster(machines=MACHINES)    
     input_desc = [CSV('/tmp/my_input_%d.csv' % i) for i in range(10)]
     output_desc = [CSV('/tmp/my_output.csv')]
 
@@ -63,7 +65,7 @@ class TestMR(unittest.TestCase):
 
   def test_mr_leveldb(self):
     write_csv_files()
-    cluster = mycloud.Cluster(machines=['localhost'])    
+    cluster = mycloud.Cluster(machines=MACHINES)    
     input_desc = [CSV('/tmp/my_input_%d.csv' % i) for i in range(10)]
     output_desc = [LevelDB('/tmp/my_output.ldb')]
     
@@ -74,7 +76,7 @@ class TestMR(unittest.TestCase):
 
 class TestClientFS(unittest.TestCase):
   def test_cloud_read(self):
-    c = mycloud.Cluster(machines=['localhost'])
+    c = mycloud.Cluster(machines=MACHINES)
     os.system('rm -rf /tmp/foo')
     rf = mycloud.fs.FS.open('client:///tmp/foo', 'w')
     rf.write('hello!')
@@ -84,7 +86,7 @@ class TestClientFS(unittest.TestCase):
     self.assertEqual(lf, 'hello!')
     
   def test_cloud_iter(self):
-    c = mycloud.Cluster(machines=['localhost'])
+    c = mycloud.Cluster(machines=MACHINES)
     os.system('rm -rf /tmp/foo')
     lf = open('/tmp/foo', 'w')
     lf.write('abcabcabc\n' * 1000)
@@ -99,7 +101,7 @@ class TestClientFS(unittest.TestCase):
   
   def test_mr_cloud_fs(self):
     write_csv_files()
-    cluster = mycloud.Cluster(machines=['localhost'])    
+    cluster = mycloud.Cluster(machines=MACHINES)    
     input_desc = [CSV('client:///tmp/my_input_%d.csv' % i) for i in range(10)]
     output_desc = [CSV('client:///tmp/my_output.csv')]
 

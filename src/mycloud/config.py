@@ -15,7 +15,7 @@ class Options(object):
   
   def __init__(self):
     self.temp_prefix = tempfile.gettempdir()
-    self.machines = ['localhost']
+    self.machines = [ { 'hostname' : 'localhost', 'cores' : 4 } ]
     self.max_map_buffer_size = 32 * 1000 * 1000
     self.max_reduce_buffer_size = 128 * 1000 * 1000
     

@@ -97,9 +97,10 @@ class WorkerHandler(object):
     handle.done(multiprocessing.cpu_count())
     
   def setup(self, handle, opt):
+    logging.info('Setting up worker with new options...')
     for k in OPTIONS.__slots__:
       setattr(OPTIONS, k, getattr(opt, k))
-      logging.info('%s %s %s', k, getattr(OPTIONS, k), getattr(opt, k))
+      logging.info('Updating option: %s, old: %s, new: %s', k, getattr(OPTIONS, k), getattr(opt, k))
       
     setup_worker_process(OPTIONS.log_host, OPTIONS.log_port)
     

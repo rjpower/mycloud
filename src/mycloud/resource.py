@@ -126,7 +126,7 @@ class Zip(Resource):
     
     def __iter__(self):
       for filename in self.zip.namelist():
-        data = self.zip.FS.open(filename, 'r').read()
+        data = self.zip.open(filename, 'r').read()
         yield filename, data
   
   class Writer(object):
@@ -137,7 +137,7 @@ class Zip(Resource):
       self.zip.close()
     
     def add(self, k, v):
-      lf = self.zip.FS.open(k, 'w')
+      lf = self.zip.open(k, 'w')
       lf.write(v)
       lf.close()
   

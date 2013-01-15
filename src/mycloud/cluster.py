@@ -84,11 +84,11 @@ class Task(object):
 
 class WorkerClient(object):
   '''Manages connections and task execution for a remote machine.'''
-  def __init__(self, controller, host):
+  def __init__(self, controller, host, cores):
     self.controller = controller
     self.host = host
     self.tasks = []
-    self.cores = -1
+    self.cores = cores
 
   def run(self, task):
     task.start(self.client)
@@ -117,7 +117,6 @@ class WorkerClient(object):
 
     self.client = RPCClient(self.host, self.port)
     self.client.setup(OPTIONS).wait()
-    self.cores = self.client.num_cores().wait()
 
 class Cluster(object):
   def __init__(self, **kw):
@@ -136,8 +135,9 @@ class Cluster(object):
     servers = {}
     connections = []
     index = 0
-    for host in OPTIONS.machines:
-      s = WorkerClient(self, host)
+    for m in OPTIONS.machines:
+      host = m['hostname']
+      s = WorkerClient(self, host, cores=m['cores'])
       servers[host] = s
       connections.append(mycloud.thread.spawn(s.connect))
 
