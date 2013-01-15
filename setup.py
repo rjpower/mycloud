@@ -132,7 +132,7 @@ MyCloud builds on the phenomonally useful
     author="Russell Power",
     author_email="power@cs.nyu.edu",
     license="BSD",
-    version="0.49",
+    version="0.51",
     url="http://github.com/rjpower/mycloud",
     package_dir={ '' : 'src' },
     scripts = ['scripts/cloudp'],

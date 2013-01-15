@@ -31,6 +31,27 @@ class Resource(object):
   def reader(self):
     return self.__class__.Reader(self.filename)
 
+class Pickle(Resource):
+  class Writer(object):
+    def __init__(self, f):
+      self.file = FS.open(f, 'w')
+      self.data = {}
+
+    def __del__(self):
+      self.file.write(cPickle.dumps(self.data))
+      self.file.close()
+
+    def add(self, k, v):
+      self.data[k] = v
+
+  class Reader(object):
+    def __init__(self, f):
+      self.data = cPickle.loads(FS.open(f))
+
+    def __iter__(self):
+      for k,v in self.data:
+        yield k, v
+
 class CSV(Resource):
   class Writer(object):
     def __init__(self, f):

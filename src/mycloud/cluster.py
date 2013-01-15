@@ -102,7 +102,7 @@ class WorkerClient(object):
   
   def connect(self):
     logging.info('host: %s', self.host)
-    ssh = mycloud.connections.Local.connect(self.host)
+    ssh = mycloud.connections.SSH.connect(self.host)
     stdin, stdout, stderr = ssh.invoke(
       sys.executable,
       '-m', 'mycloud.worker_main',

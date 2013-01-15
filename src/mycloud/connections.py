@@ -53,7 +53,7 @@ class SSH(object):
 
 class Local(object):
   @staticmethod
-  def connect(host):
+  def connect():
     return Local()
 
   def invoke(self, command, *args):
